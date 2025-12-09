@@ -1,6 +1,5 @@
 package dev.replayshield.security;
 
-import java.io.Console;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -9,13 +8,15 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.Arrays;
-import java.util.Scanner;
 
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
 
+import dev.replayshield.Main;
 import dev.replayshield.db.SecureDbSession;
+import dev.replayshield.db.SecureDbSession.DbSession;
 import dev.replayshield.util.PathResolver;
 import dev.replayshield.util.ReplayShieldException;
 import dev.replayshield.util.ReplayShieldException.ErrorType;
@@ -35,21 +36,16 @@ public class KeyLoader {
             byte[] salt = new byte[SALT_LEN];
             SecureRandom.getInstanceStrong().nextBytes(salt);
             return salt;
-        } catch (NoSuchAlgorithmException e) {
-            throw new ReplayShieldException(ErrorType.INITIALIZATION, "Failed to acquire secure random instance", e);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new ReplayShieldException(ErrorType.INITIALIZATION, "Failed to acquire secure random instance",
+                    exception);
         }
     }
 
     // ========= PW input =========
-    private static char[] readPassword(String prompt) {
-        Console console = System.console();
-        if (console != null) {
-            System.out.print(prompt);
-            return console.readPassword();
-        } else {
-            System.out.print(prompt);
-            return new Scanner(System.in).nextLine().toCharArray();
-        }
+    private static char[] passwordPrompt(String prompt) {
+        System.out.print(prompt);
+        return Main.CONSOLE.readPassword();
     }
 
     private static byte[] deriveKey(char[] pw, byte[] salt) {
@@ -57,24 +53,24 @@ public class KeyLoader {
             PBEKeySpec spec = new PBEKeySpec(pw, salt, ITER, KEY_LEN);
             SecretKeyFactory skf = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
             return skf.generateSecret(spec).getEncoded();
-        } catch (GeneralSecurityException e) {
-            throw new ReplayShieldException(ErrorType.ADMIN_AUTH, "Failed to derive admin key", e);
+        } catch (GeneralSecurityException exception) {
+            throw new ReplayShieldException(ErrorType.ADMIN_AUTH, "Failed to derive admin key", exception);
         }
     }
 
     private static void saveSalt(byte[] salt) {
         try {
             Files.write(PathResolver.getSaltFile().toPath(), salt);
-        } catch (IOException e) {
-            throw new ReplayShieldException(ErrorType.INITIALIZATION, "Failed to write salt file", e);
+        } catch (IOException exception) {
+            throw new ReplayShieldException(ErrorType.INITIALIZATION, "Failed to write salt file", exception);
         }
     }
 
     private static byte[] loadSalt() {
         try {
             return Files.readAllBytes(PathResolver.getSaltFile().toPath());
-        } catch (IOException e) {
-            throw new ReplayShieldException(ErrorType.INITIALIZATION, "Failed to load salt file", e);
+        } catch (IOException exception) {
+            throw new ReplayShieldException(ErrorType.INITIALIZATION, "Failed to load salt file", exception);
         }
     }
 
@@ -83,8 +79,9 @@ public class KeyLoader {
     // ================================================
     public static boolean initializeAdminPassword() {
 
-        char[] p1 = readPassword("Set admin password: ");
-        char[] p2 = readPassword("Confirm admin password: ");
+        // 암호 입력
+        char[] p1 = passwordPrompt("Set admin password: ");
+        char[] p2 = passwordPrompt("Confirm admin password: ");
 
         if (!Arrays.equals(p1, p2)) {
             System.out.println("Passwords do not match. Aborting.");
@@ -93,9 +90,11 @@ public class KeyLoader {
             return false;
         }
 
+        // salt 생성
         byte[] salt = generateSalt();
         saveSalt(salt);
 
+        // 키 생성
         byte[] key = deriveKey(p1, salt);
 
         Arrays.fill(p1, '\0');
@@ -103,23 +102,28 @@ public class KeyLoader {
 
         AdminKeyHolder.setKey(key);
 
+        // 암호화된 DB 생성
         createFreshEncryptedDb(key);
+
+        // 해당 과정 예외없이 끝났을때 true return
         return true;
     }
 
     // fresh DB 생성
     private static void createFreshEncryptedDb(byte[] key) {
 
+        // 파일 삭제 다시 확인
         Path encFile = PathResolver.getEncryptedDbFile().toPath();
         try {
             Files.deleteIfExists(encFile);
-        } catch (IOException e) {
-            throw new ReplayShieldException(ErrorType.INITIALIZATION, "Failed to clean old encrypted DB", e);
+        } catch (IOException exception) {
+            throw new ReplayShieldException(ErrorType.INITIALIZATION, "Failed to clean old encrypted DB", exception);
         }
 
         // SecureDbSession 내부에서 tmpfs DB 생성 → 스키마 자동 생성 → 암호화 저장
-        try (SecureDbSession.DbSession session = SecureDbSession.openWritable(key)) {
-            session.connection(); // open to trigger schema creation
+        try (DbSession session = SecureDbSession.openWritable(key)) {
+            session.connection(); // 연결 -> 스키마 자동 생성
+            // try문 종료시 session.close() 자동 호출
         }
 
         System.out.println("Encrypted DB created at: " + encFile);
@@ -134,7 +138,7 @@ public class KeyLoader {
             throw new ReplayShieldException(ErrorType.INITIALIZATION, "Salt not found. Run init first.");
         }
 
-        char[] pw = readPassword("Admin password: ");
+        char[] pw = passwordPrompt("Admin password: ");
         byte[] salt = loadSalt();
 
         byte[] key = deriveKey(pw, salt);
@@ -153,23 +157,26 @@ public class KeyLoader {
             throw new ReplayShieldException(ErrorType.INITIALIZATION, "Encrypted DB not found. Run init first.");
         }
 
-        try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key)) {
+        // key로 읽기상태로 세션 시작
+        try (DbSession session = SecureDbSession.openReadOnly(key)) {
+            // 마스터 테이블 읽기 시도
             verifySqliteMasterReadable(session.connection());
-        } catch (ReplayShieldException e) {
-            if (e.getType() == ErrorType.CRYPTO || e.getType() == ErrorType.DATABASE_ACCESS) {
-                throw new ReplayShieldException(ErrorType.ADMIN_AUTH, "Invalid admin password (DB decryption failed)",
-                        e);
-            }
-            throw e;
-        } catch (Exception e) {
-            throw new ReplayShieldException(ErrorType.ADMIN_AUTH, "Invalid admin password (DB decryption failed)", e);
+        } catch (ReplayShieldException exception) {
+            throw new ReplayShieldException(
+                    ErrorType.ADMIN_AUTH,
+                    "Invalid admin password (DB decryption failed)",
+                    exception);
         }
     }
 
-    private static Object verifySqliteMasterReadable(Connection conn) throws SQLException {
-        try (var st = conn.createStatement();
-                var rs = st.executeQuery("SELECT name FROM sqlite_master LIMIT 1")) {
-            return null;
+    private static void verifySqliteMasterReadable(Connection conn) {
+        try (Statement st = conn.createStatement();) {
+            st.executeQuery("SELECT name FROM sqlite_master LIMIT 1");
+        } catch (SQLException exception) {
+            throw new ReplayShieldException(
+                    ReplayShieldException.ErrorType.DATABASE_ACCESS,
+                    "Failed to verify SQLite master table",
+                    exception);
         }
     }
 
