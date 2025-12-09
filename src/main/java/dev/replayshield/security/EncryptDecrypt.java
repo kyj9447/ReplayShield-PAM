@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.Arrays;
 
@@ -25,7 +26,7 @@ public class EncryptDecrypt {
         SecureRandom tmp;
         try {
             tmp = SecureRandom.getInstanceStrong();
-        } catch (Exception exception) {
+        } catch (NoSuchAlgorithmException exception) {
             tmp = new SecureRandom();
         }
         rnd = tmp;
