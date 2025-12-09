@@ -1,0 +1,52 @@
+plugins {
+    id 'java'
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.xerial:sqlite-jdbc:3.45.1.0'
+    implementation 'org.slf4j:slf4j-nop:2.0.9'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+shadowJar {
+    archiveBaseName.set('replayshield')
+    archiveVersion.set('')
+    archiveClassifier.set('')
+
+    manifest {
+        attributes 'Main-Class': 'dev.replayshield.Main'
+    }
+    
+    mergeServiceFiles()
+
+    // sqlite-jdbc에서 Linux x86_64 네이티브만 남기고 나머지는 제외
+    exclude 'org/sqlite/native/Linux/arm/**',
+            'org/sqlite/native/Linux/aarch64/**',
+            'org/sqlite/native/Linux/x86/**',
+            'org/sqlite/native/Linux/armv7/**',
+            'org/sqlite/native/Linux/ppc64/**',
+            'org/sqlite/native/Linux/armv6/**',
+            'org/sqlite/native/Linux-Android/**',
+            'org/sqlite/native/Windows/**',
+            'org/sqlite/native/Linux-Musl/**',
+            'org/sqlite/native/Mac/**',
+            'org/sqlite/native/FreeBSD/**'
+}
+
+tasks.named('shadowJar') {
+    group = 'build'
+    description = '의존성을 포함한 실행 가능한 JAR 생성'
+}
+
+build.dependsOn(shadowJar)
