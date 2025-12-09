@@ -1,5 +1,6 @@
 package dev.replayshield.db;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -29,10 +30,10 @@ public class Db {
             }
 
             return conn;
-        } catch (ReplayShieldException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to open SQLite database", e);
+        } catch (ReplayShieldException exception) {
+            throw exception;
+        } catch (IOException | ClassNotFoundException | SQLException exception) {
+            throw new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to open SQLite database", exception);
         }
     }
 
@@ -43,8 +44,8 @@ public class Db {
             if (!rs.next()) {
                 initSchema(conn);
             }
-        } catch (SQLException e) {
-            throw new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to validate database schema", e);
+        } catch (SQLException exception) {
+            throw new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to validate database schema", exception);
         }
     }
 
@@ -79,8 +80,9 @@ public class Db {
                             FOREIGN KEY(username) REFERENCES user_config(username)
                         )
                     """);
-        } catch (SQLException e) {
-            throw new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to initialize database schema", e);
+        } catch (SQLException exception) {
+            throw new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to initialize database schema",
+                    exception);
         }
     }
 }

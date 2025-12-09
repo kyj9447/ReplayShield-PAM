@@ -47,11 +47,11 @@ public class HttpAuthServer {
             }
 
             exchange.sendResponseHeaders(405, -1);
-        } catch (ReplayShieldException e) {
-            System.err.println("[HTTP] " + e.getMessage());
+        } catch (ReplayShieldException exception) {
+            System.err.println("[HTTP] " + exception.getMessage());
             sendError(exchange);
-        } catch (Exception e) {
-            System.err.println("[HTTP] Unexpected error: " + e.getMessage());
+        } catch (Exception exception) {
+            System.err.println("[HTTP] Unexpected error: " + exception.getMessage());
             sendError(exchange);
         }
     }

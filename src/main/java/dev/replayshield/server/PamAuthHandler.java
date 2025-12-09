@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Base64;
@@ -87,7 +88,7 @@ public class PamAuthHandler {
 
         // 1) user_config에서 block_count 조회
         int blockCount;
-        try (var ps = conn.prepareStatement("""
+        try (PreparedStatement ps = conn.prepareStatement("""
                     SELECT block_count FROM user_config WHERE username=?
                 """)) {
             ps.setString(1, username);
@@ -103,7 +104,7 @@ public class PamAuthHandler {
         int pwId;
         String pwHint;
 
-        try (var ps = conn.prepareStatement("""
+        try (PreparedStatement ps = conn.prepareStatement("""
                     SELECT id, pw_hint FROM password_pool
                     WHERE username=? AND pw_hash=?
                 """)) {
@@ -120,7 +121,7 @@ public class PamAuthHandler {
 
         // 3) block_count 로직: 최근 block_count 번 안에 이 PW가 사용되었으면 KICK
         if (blockCount > 0) {
-            try (var ps = conn.prepareStatement("""
+            try (PreparedStatement ps = conn.prepareStatement("""
                         SELECT pw_hash
                         FROM password_history
                         WHERE username=?
@@ -142,7 +143,7 @@ public class PamAuthHandler {
 
         // 4) PASS: history에 추가 + hit_count 증가
         long now = System.currentTimeMillis();
-        try (var ps = conn.prepareStatement("""
+        try (PreparedStatement ps = conn.prepareStatement("""
                     INSERT INTO password_history(username, pw_hash, pw_hint, created_at)
                     VALUES(?, ?, ?, ?)
                 """)) {
@@ -153,7 +154,7 @@ public class PamAuthHandler {
             ps.executeUpdate();
         }
 
-        try (var ps = conn.prepareStatement("""
+        try (PreparedStatement ps = conn.prepareStatement("""
                     UPDATE password_pool SET hit_count = hit_count + 1 WHERE id=?
                 """)) {
             ps.setInt(1, pwId);

@@ -25,7 +25,7 @@ public class EncryptDecrypt {
         SecureRandom tmp;
         try {
             tmp = SecureRandom.getInstanceStrong();
-        } catch (Exception e) {
+        } catch (Exception exception) {
             tmp = new SecureRandom();
         }
         rnd = tmp;
@@ -47,8 +47,8 @@ public class EncryptDecrypt {
             System.arraycopy(iv, 0, out, 0, iv.length);
             System.arraycopy(cipherText, 0, out, iv.length, cipherText.length);
             return out;
-        } catch (GeneralSecurityException e) {
-            throw new ReplayShieldException(ErrorType.CRYPTO, "Failed to encrypt data", e);
+        } catch (GeneralSecurityException exception) {
+            throw new ReplayShieldException(ErrorType.CRYPTO, "Failed to encrypt data", exception);
         }
     }
 
@@ -66,8 +66,8 @@ public class EncryptDecrypt {
             cipher.init(Cipher.DECRYPT_MODE, ks, spec);
 
             return cipher.doFinal(cipherText);
-        } catch (GeneralSecurityException e) {
-            throw new ReplayShieldException(ErrorType.CRYPTO, "Failed to decrypt data", e);
+        } catch (GeneralSecurityException exception) {
+            throw new ReplayShieldException(ErrorType.CRYPTO, "Failed to decrypt data", exception);
         }
     }
 
@@ -77,8 +77,8 @@ public class EncryptDecrypt {
             byte[] enc = encrypt(key, plain);
             Files.write(encFile, enc);
             Arrays.fill(plain, (byte) 0);
-        } catch (IOException e) {
-            throw new ReplayShieldException(ErrorType.CRYPTO, "Failed to encrypt database file", e);
+        } catch (IOException exception) {
+            throw new ReplayShieldException(ErrorType.CRYPTO, "Failed to encrypt database file", exception);
         }
     }
 
@@ -88,8 +88,8 @@ public class EncryptDecrypt {
             byte[] plain = decrypt(key, enc);
             Files.write(plainFile, plain);
             Arrays.fill(plain, (byte) 0);
-        } catch (IOException e) {
-            throw new ReplayShieldException(ErrorType.CRYPTO, "Failed to decrypt database file", e);
+        } catch (IOException exception) {
+            throw new ReplayShieldException(ErrorType.CRYPTO, "Failed to decrypt database file", exception);
         }
     }
 }

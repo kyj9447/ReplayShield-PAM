@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.SQLException;
 
 import dev.replayshield.security.EncryptDecrypt;
 import dev.replayshield.util.PathResolver;
@@ -26,12 +27,13 @@ public final class SecureDbSession {
             EncryptDecrypt.decryptFile(key, encFile, tmp);
             Connection conn = Db.open(tmp);
             return new DbSession(key, encFile, tmp, conn, false);
-        } catch (ReplayShieldException e) {
+        } catch (ReplayShieldException exception) {
             deleteQuietly(tmp);
-            throw e;
-        } catch (Exception e) {
+            throw exception;
+        } catch (Exception exception) {
             deleteQuietly(tmp);
-            throw new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to open read-only DB session", e);
+            throw new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to open read-only DB session",
+                    exception);
         }
     }
 
@@ -45,12 +47,12 @@ public final class SecureDbSession {
             }
             Connection conn = Db.open(tmp);
             return new DbSession(key, encFile, tmp, conn, true);
-        } catch (ReplayShieldException e) {
+        } catch (ReplayShieldException exception) {
             deleteQuietly(tmp);
-            throw e;
-        } catch (Exception e) {
+            throw exception;
+        } catch (Exception exception) {
             deleteQuietly(tmp);
-            throw new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to open writable DB session", e);
+            throw new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to open writable DB session", exception);
         }
     }
 
@@ -77,6 +79,7 @@ public final class SecureDbSession {
             return connection;
         }
 
+        // AutoCloseable에 의해 try ()문 종료시 해당 메서드 호출됨
         @Override
         public void close() {
             if (closed) {
@@ -86,27 +89,35 @@ public final class SecureDbSession {
             ReplayShieldException pending = null;
             try {
                 connection.close();
-            } catch (Exception e) {
-                pending = new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to close SQLite connection", e);
+            } catch (SQLException exception) {
+                pending = new ReplayShieldException(
+                        ErrorType.DATABASE_ACCESS,
+                        "Failed to close SQLite connection",
+                        exception);
             }
 
             if (writable) {
                 try {
                     EncryptDecrypt.encryptFile(key, tmpFile, encFile);
-                } catch (ReplayShieldException e) {
-                    pending = append(pending, e);
-                } catch (Exception e) {
+                } catch (ReplayShieldException exception) {
+                    pending = append(pending, exception);
+                } catch (Exception exception) {
                     pending = append(pending,
-                            new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to persist encrypted DB", e));
+                            new ReplayShieldException(
+                                    ErrorType.DATABASE_ACCESS,
+                                    "Failed to persist encrypted DB",
+                                    exception));
                 }
             }
 
             try {
                 Files.deleteIfExists(tmpFile);
-            } catch (IOException e) {
+            } catch (IOException exception) {
                 pending = append(pending,
-                        new ReplayShieldException(ErrorType.SYSTEM_ENVIRONMENT,
-                                "Failed to delete temporary database file", e));
+                        new ReplayShieldException(
+                                ErrorType.SYSTEM_ENVIRONMENT,
+                                "Failed to delete temporary database file",
+                                exception));
             }
 
             if (pending != null) {
