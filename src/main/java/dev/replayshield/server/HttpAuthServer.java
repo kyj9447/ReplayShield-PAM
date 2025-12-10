@@ -27,40 +27,31 @@ public class HttpAuthServer {
 
     private void handleAuth(HttpExchange exchange) throws IOException {
         try (exchange) {
-            if ("GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-                byte[] body = "OK".getBytes();
-                exchange.sendResponseHeaders(200, body.length);
-                try (OutputStream os = exchange.getResponseBody()) {
-                    os.write(body);
-                }
+            // POST가 아니면 405
+            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
                 return;
             }
 
-            if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
-                String result = authHandler.handleHttpPost(exchange);
-                byte[] body = result.getBytes();
-                exchange.sendResponseHeaders(200, body.length);
-                try (OutputStream os = exchange.getResponseBody()) {
-                    os.write(body);
-                }
-                return;
+            String result = authHandler.handleHttpPost(exchange);
+            byte[] body = result.getBytes();
+            exchange.sendResponseHeaders(200, body.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(body);
             }
-
-            exchange.sendResponseHeaders(405, -1);
         } catch (ReplayShieldException exception) {
-            System.err.println("[HTTP] " + exception.getMessage());
+            System.err.println("[HTTP] Request failed");
             sendError(exchange);
         } catch (Exception exception) {
-            System.err.println("[HTTP] Unexpected error: " + exception.getMessage());
+            System.err.println("[HTTP] Unexpected error");
             sendError(exchange);
         }
     }
 
     private void sendError(HttpExchange exchange) throws IOException {
-        byte[] body = "FAIL".getBytes();
-        exchange.sendResponseHeaders(500, body.length);
+        exchange.sendResponseHeaders(500, 0);
         try (OutputStream os = exchange.getResponseBody()) {
-            os.write(body);
+            os.flush();
         }
     }
 
