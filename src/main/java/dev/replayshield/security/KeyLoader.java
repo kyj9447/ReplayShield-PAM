@@ -182,4 +182,43 @@ public class KeyLoader {
                     exception);
         }
     }
+
+    public static byte[] changeAdminPassword(byte[] currentKey) {
+        if (currentKey == null || currentKey.length == 0) {
+            throw new ReplayShieldException(ErrorType.ADMIN_AUTH, "Current admin key is not available.");
+        }
+        if (!saltExists()) {
+            throw new ReplayShieldException(ErrorType.INITIALIZATION, "Salt not found. Run init first.");
+        }
+        Path encFile = PathResolver.getEncryptedDbFile().toPath();
+        if (!Files.exists(encFile)) {
+            throw new ReplayShieldException(ErrorType.INITIALIZATION, "Encrypted DB not found. Run init first.");
+        }
+
+        char[] newPw = passwordPrompt("New admin password: ");
+        char[] confirm = passwordPrompt("Confirm new admin password: ");
+        if (!Arrays.equals(newPw, confirm)) {
+            System.out.println("Passwords do not match. Aborting.");
+            Arrays.fill(newPw, '\0');
+            Arrays.fill(confirm, '\0');
+            return null;
+        }
+        Arrays.fill(confirm, '\0');
+
+        byte[] newSalt = generateSalt();
+        byte[] newKey = deriveKey(newPw, newSalt);
+        Arrays.fill(newPw, '\0');
+
+        Path tmp = PathResolver.createMemoryDbTempFile();
+        try {
+            EncryptDecrypt.decryptFile(currentKey, encFile, tmp);
+            EncryptDecrypt.encryptFile(newKey, tmp, encFile);
+            saveSalt(newSalt);
+            System.out.println("Admin password updated.");
+            return newKey;
+        } finally {
+            Arrays.fill(newSalt, (byte) 0);
+            Main.deleteQuietly(tmp);
+        }
+    }
 }
