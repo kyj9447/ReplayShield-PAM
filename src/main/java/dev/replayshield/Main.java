@@ -16,7 +16,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import dev.replayshield.db.SecureDbSession;
 import dev.replayshield.db.SecureDbSession.DbSession;
@@ -85,9 +87,15 @@ public class Main {
                 }
             }
 
-        } catch (ReplayShieldException | IOException | NoSuchAlgorithmException | NumberFormatException
+        } catch (ReplayShieldException e) {
+            if (e.getType() == ErrorType.SYSTEM_ENVIRONMENT) {
+                System.err.println("[FATAL] " + e.getMessage());
+            } else {
+                System.err.println("[ERROR] " + e.getMessage());
+            }
+        } catch (IOException | NoSuchAlgorithmException | NumberFormatException
                 | SQLException exception) {
-            System.err.println("[FATAL] " + exception.getMessage());
+            System.err.println("[ERROR] " + exception.getMessage());
         } finally {
             if (server != null) {
                 server.stop(1); // 필요에 따라 delay 지정
@@ -136,10 +144,12 @@ public class Main {
                 return;
             }
 
+            // 파일 삭제
             Files.deleteIfExists(PathResolver.getSaltFile().toPath());
             Files.deleteIfExists(PathResolver.getEncryptedDbFile().toPath());
         }
 
+        // 실제 init 진행
         if (KeyLoader.initializeAdminPassword()) {
             System.out.println("Initialization complete.");
             System.out.println("Run 'replayshield serve' to start the server.");
@@ -193,15 +203,40 @@ public class Main {
                     System.out.println("Unknown menu.");
             }
         }
+        System.out.println("Exiting...");
     }
 
     private static void manageAddUser(byte[] key)
             throws SQLException, NoSuchAlgorithmException, ReplayShieldException {
-        System.out.print("New username: ");
-        String username = CONSOLE.readLine().trim();
-        if (username.isEmpty()) {
-            System.out.println("Username cannot be empty.");
-            return;
+
+        String username;
+        while (true) {
+            System.out.print("New username (type CANCEL to cancel): ");
+            username = CONSOLE.readLine().trim();
+            if ("CANCEL".equalsIgnoreCase(username)) {
+                return;
+            }
+            if (username.isEmpty()) {
+                System.out.println("Username cannot be empty.");
+                continue;
+            }
+
+            // username 중복검사
+            boolean exists;
+            try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key);
+                    PreparedStatement ps = session.connection()
+                            .prepareStatement("SELECT 1 FROM user_config WHERE username=?")) {
+                ps.setString(1, username);
+                try (ResultSet rs = ps.executeQuery()) {
+                    exists = rs.next();
+                }
+            }
+
+            if (exists) {
+                System.out.println("Username already exists. Choose another.");
+            } else {
+                break;
+            }
         }
 
         // 비밀번호 최소 3개 이상
@@ -218,18 +253,34 @@ public class Main {
                 }
                 break;
             }
+
+            // 중복검사
+            boolean duplicate = pwList.stream()
+                    .anyMatch(existing -> Arrays.equals(existing, input));
+            if (duplicate) {
+                System.out.println("This password was already entered. Please use a different one.");
+                Arrays.fill(input, '\0'); // 즉시 삭제
+                continue;
+            }
+
+            // 목록에 추가
             pwList.add(input);
         }
 
         // block 수 지정
         int maxPwCount = pwList.size();
-        String prompt = "Block count (0 ~ " + (maxPwCount - 1) + "): ";
-        int blockCount = readInt(prompt);
-        if (blockCount < 0 || blockCount >= maxPwCount) {
+        int blockCount;
+
+        while (true) {
+            String prompt = "Block count (0 ~ " + (maxPwCount - 1) + "): ";
+            blockCount = readInt(prompt);
+            if (blockCount >= 0 && blockCount < maxPwCount) {
+                break; // 올바른 범위면 반복 종료
+            }
             System.out.println("block_count must be between 0 and " + (maxPwCount - 1));
-            return;
         }
 
+        // DB 저장 진행
         try (DbSession session = SecureDbSession.openWritable(key)) {
             Connection conn = session.connection();
             try (PreparedStatement ps = conn.prepareStatement("""
@@ -266,27 +317,32 @@ public class Main {
 
     private static void manageUserMenu(byte[] key)
             throws SQLException, ReplayShieldException, NoSuchAlgorithmException {
-        System.out.print("Target username: ");
-        String username = CONSOLE.readLine().trim();
-        if (username.isEmpty()) {
-            System.out.println("Username required.");
-            return;
-        }
-
-        // 대상 사용자 존재 확인
-        boolean exists;
-        try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key);
-                PreparedStatement ps = session.connection()
-                        .prepareStatement("SELECT 1 FROM user_config WHERE username=?")) {
-            ps.setString(1, username);
-            try (ResultSet rs = ps.executeQuery()) {
-                exists = rs.next();
+        String username;
+        while (true) {
+            System.out.print("Target username (type CANCEL to cancel): ");
+            username = CONSOLE.readLine().trim();
+            if ("CANCEL".equalsIgnoreCase(username)) {
+                return; // 사용자 취소
             }
-        }
+            if (username.isEmpty()) {
+                System.out.println("Username required.");
+                continue;
+            }
 
-        if (!exists) {
+            boolean exists;
+            try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key);
+                    PreparedStatement ps = session.connection()
+                            .prepareStatement("SELECT 1 FROM user_config WHERE username=?")) {
+                ps.setString(1, username);
+                try (ResultSet rs = ps.executeQuery()) {
+                    exists = rs.next();
+                }
+            }
+
+            if (exists) {
+                break; // 루프 탈출, 해당 사용자로 다음 단계 진행
+            }
             System.out.println("User not found.");
-            return;
         }
 
         boolean running = true;
@@ -340,57 +396,96 @@ public class Main {
     private static void addUserPassword(byte[] key, String username)
             throws SQLException, NoSuchAlgorithmException, ReplayShieldException {
 
-        // 새 암호 입력
-        System.out.print("New password: ");
-        char[] pw = CONSOLE.readPassword();
-        if (pw.length == 0) {
-            System.out.println("Password cannot be empty.");
-            return;
+        // 1) 기존 해시 목록 수집
+        Set<String> existingHashes = new HashSet<>();
+        try (var session = SecureDbSession.openReadOnly(key);
+                var ps = session.connection().prepareStatement(
+                        "SELECT pw_hash FROM password_pool WHERE username=?")) {
+            ps.setString(1, username);
+            try (var rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    existingHashes.add(rs.getString(1));
+                }
+            }
         }
 
-        // 새 암호 INSERT
-        try (SecureDbSession.DbSession session = SecureDbSession.openWritable(key)) {
-            Connection conn = session.connection();
-            String hash = PamAuthPasswordUtil.hashPassword(pw);
+        // 2) 새 암호 입력
+        char[] pw;
+        while (true) {
+            System.out.print("New password: ");
+            pw = CONSOLE.readPassword();
+
+            // 길이검사
+            if (pw.length == 0) {
+                System.out.println("Password cannot be empty.");
+                continue;
+            }
+
+            // 중복검사
+            String newHash = PamAuthPasswordUtil.hashPassword(pw);
+            if (existingHashes.contains(newHash)) {
+                System.out.println("This password is already registered. Enter a different one.");
+                Arrays.fill(pw, '\0'); // 즉시 삭제
+                continue;
+            }
+
+            // 새 암호 INSERT
             String hint = PamAuthPasswordUtil.makeHint(pw);
-            try (PreparedStatement ps = conn.prepareStatement("""
-                        INSERT INTO password_pool(username, pw_hash, pw_hint, hit_count, blocked)
-                        VALUES(?, ?, ?, 0, 0)
-                    """)) {
+            Arrays.fill(pw, '\0'); // 사용 후 지우기
+            // 3) writable 세션에서 INSERT
+            try (var session = SecureDbSession.openWritable(key);
+                    var ps = session.connection().prepareStatement("""
+                                INSERT INTO password_pool(username, pw_hash, pw_hint, hit_count, blocked)
+                                VALUES(?, ?, ?, 0, 0)
+                            """)) {
                 ps.setString(1, username);
-                ps.setString(2, hash);
+                ps.setString(2, newHash);
                 ps.setString(3, hint);
                 ps.executeUpdate();
             }
             System.out.println("Password added.");
+            break;
         }
     }
 
     private static void deleteUserPassword(byte[] key, String username)
             throws SQLException, ReplayShieldException {
 
-        // PW Pool 출력
-        showUserPwPool(key, username);
-
         // 삭제 대상 암호 선택
-        int id = readInt("Password ID to delete: ");
+        int id;
+        while (true) {
+            // PW Pool 먼저 출력
+            showUserPwPool(key, username);
 
-        try (SecureDbSession.DbSession session = SecureDbSession.openWritable(key)) {
-            Connection conn = session.connection();
-            try (PreparedStatement ps = conn.prepareStatement("""
-                        DELETE FROM password_pool
-                        WHERE id = ? AND username = ?
-                    """)) {
-                ps.setInt(1, id);
-                ps.setString(2, username);
-                int n = ps.executeUpdate(); // 삭제된 행 수
-                if (n > 0) {
-                    System.out.println("Password deleted.");
-                } else {
-                    System.out.println("No such password for this user.");
+            id = readInt("Password ID to delete (0 to cancel): ");
+
+            if (id == 0) {
+                System.out.println("Deletion canceled.");
+                return;
+            }
+
+            if (id > 0) {
+                try (SecureDbSession.DbSession session = SecureDbSession.openWritable(key)) {
+                    Connection conn = session.connection();
+                    try (PreparedStatement ps = conn.prepareStatement("""
+                                DELETE FROM password_pool
+                                WHERE id = ? AND username = ?
+                            """)) {
+                        ps.setInt(1, id);
+                        ps.setString(2, username);
+                        int n = ps.executeUpdate(); // 삭제된 행 수
+                        if (n > 0) {
+                            System.out.println("Password deleted.");
+                        } else {
+                            System.out.println("No such password for this user.");
+                        }
+                    }
                 }
             }
+
+            System.out.println("ID must be positive.");
         }
+
     }
 
     private static void changeUserBlockCount(byte[] key, String username)
@@ -410,19 +505,23 @@ public class Main {
             }
         }
 
+        // DB 오류 등으로 해당 사용자의 암호가 2개 미만인 경우 return
         if (pwCount <= 1) {
             System.out.println("Need at least 2 passwords to set block_count.");
             return;
         }
 
-        String prompt = "New block_count (0 ~ " + (pwCount - 1) + "): ";
-        int bc = readInt(prompt);
-
-        if (bc < 0 || bc >= pwCount) {
-            System.out.println("block_count must be between 0 and " + (pwCount - 1));
-            return;
+        int bc;
+        while (true) {
+            String prompt = "New block_count (1 ~ " + (pwCount - 1) + "): ";
+            bc = readInt(prompt);
+            if (bc >= 1 && bc < pwCount) {
+                break; // 조건 만족 시 탈출
+            }
+            System.out.println("block_count must be between 1 and " + (pwCount - 1));
         }
 
+        // DB UPDATE
         try (DbSession session = SecureDbSession.openWritable(key)) {
             Connection conn = session.connection();
             try (PreparedStatement ps = conn.prepareStatement("""
