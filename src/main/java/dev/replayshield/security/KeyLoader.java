@@ -139,7 +139,7 @@ public class KeyLoader {
             throw new ReplayShieldException(ErrorType.INITIALIZATION, "Salt not found. Run init first.");
         }
 
-        char[] pw = passwordPrompt("Admin password: ");
+        char[] pw = passwordPrompt("ReplayShield Admin password: ");
         byte[] salt = loadSalt();
 
         byte[] key = deriveKey(pw, salt);
