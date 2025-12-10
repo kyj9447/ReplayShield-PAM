@@ -8,6 +8,7 @@ import java.util.concurrent.Executors;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
+import dev.replayshield.util.ErrorReporter;
 import dev.replayshield.util.ReplayShieldException;
 
 public class HttpAuthServer {
@@ -40,10 +41,10 @@ public class HttpAuthServer {
                 os.write(body);
             }
         } catch (ReplayShieldException exception) {
-            System.err.println("[HTTP] Request failed");
+            ErrorReporter.logError("HTTP", exception);
             sendError(exchange);
         } catch (Exception exception) {
-            System.err.println("[HTTP] Unexpected error");
+            ErrorReporter.logError("HTTP", exception);
             sendError(exchange);
         }
     }

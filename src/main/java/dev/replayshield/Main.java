@@ -25,6 +25,7 @@ import dev.replayshield.db.SecureDbSession.DbSession;
 import dev.replayshield.security.AdminKeyHolder;
 import dev.replayshield.security.KeyLoader;
 import dev.replayshield.server.HttpAuthServer;
+import dev.replayshield.util.ErrorReporter;
 import dev.replayshield.util.PathResolver;
 import dev.replayshield.util.ReplayShieldException;
 import dev.replayshield.util.ReplayShieldException.ErrorType;
@@ -35,11 +36,13 @@ public class Main {
     public static final Console CONSOLE = System.console();
 
     public static void main(String[] args) {
+        Thread.setDefaultUncaughtExceptionHandler(
+                (thread, throwable) -> ErrorReporter.logFatal("Thread " + thread.getName(), throwable));
 
         // sudo 검사
         if (!"root".equals(System.getProperty("user.name"))) {
-            throw new ReplayShieldException(ErrorType.CONFIGURATION,
-                    "This command must be run as root (sudo).");
+            System.err.println("This command must be run as root (sudo).");
+            return;
         }
 
         // 종료용 server 변수
@@ -47,6 +50,7 @@ public class Main {
 
         // 메인 플로우 실행
         try {
+
             // /dev/shm이 tmpfs이고 사용 가능한지 먼저 확인
             PathResolver.ensureMemoryFsAvailable();
             PathResolver.ensureBaseDirs();
@@ -60,6 +64,7 @@ public class Main {
             // ======= 모드 분기 =======
             switch (args[0]) {
                 case "init" -> {
+
                     // 콘솔 사용 가능 먼저 확인
                     if (CONSOLE == null) {
                         throw new ReplayShieldException(
@@ -69,6 +74,7 @@ public class Main {
                     runInitMode();
                 }
                 case "manage" -> {
+
                     // 콘솔 사용 가능 먼저 확인
                     if (CONSOLE == null) {
                         throw new ReplayShieldException(
@@ -80,22 +86,22 @@ public class Main {
                 case "serve" ->
                     server = runServerMode(); // server 인스턴스 받음 (종료용)
                 case "debugdb" ->
+
                     // ============[TEST]==============
                     runDebugDbDump();
                 default -> {
                     System.err.println("Unknown command. Use --help.");
                 }
             }
-
-        } catch (ReplayShieldException e) {
-            if (e.getType() == ErrorType.SYSTEM_ENVIRONMENT) {
-                System.err.println("[FATAL] " + e.getMessage());
+        } catch (ReplayShieldException exception) {
+            if (exception.getType() == ErrorType.SYSTEM_ENVIRONMENT) {
+                ErrorReporter.logFatal("main", exception);
             } else {
-                System.err.println("[ERROR] " + e.getMessage());
+                ErrorReporter.logError("main", exception);
             }
         } catch (IOException | NoSuchAlgorithmException | NumberFormatException
                 | SQLException exception) {
-            System.err.println("[ERROR] " + exception.getMessage());
+            ErrorReporter.logError("main", exception);
         } finally {
             if (server != null) {
                 server.stop(1); // 필요에 따라 delay 지정
@@ -106,10 +112,10 @@ public class Main {
 
     private static final String USAGE = """
             Usage: replayshield <command>
-              init      Initialize admin credentials and database
-              manage    Open administrator CLI
-              serve     Start HTTP auth server
-              debugdb   Dump database contents (debug/test)
+            initInitialize admin credentials and database
+            manageOpen administrator CLI
+            serve Start HTTP auth server
+            debugdb Dump database contents (debug/test)
             """;
 
     // ================================
@@ -117,23 +123,21 @@ public class Main {
     // ================================
     private static void runInitMode() throws IOException {
         System.out.println("=== ReplayShield Initial Setup ===");
-
         boolean saltExists = KeyLoader.saltExists(); // salt파일 존재 확인
         boolean encDbExists = PathResolver.getEncryptedDbFile().exists(); // db파일 존재 확인
-
         if (saltExists || encDbExists) {
             System.out.println("""
-                    ██╗    ██╗ █████╗ ██████╗ ███╗   ██╗███╗   ██╗██╗███╗   ██╗ ██████╗
-                    ██║    ██║██╔══██╗██╔══██╗████╗  ██║████╗  ██║██║████╗  ██║██╔════╝
-                    ██║ █╗ ██║███████║██████╔╝██╔██╗ ██║██╔██╗ ██║██║██╔██╗ ██║██║  ███╗
-                    ██║███╗██║██╔══██║██╔═██║ ██║╚██╗██║██║╚██╗██║██║██║╚██╗██║██║   ██║
-                    ╚███╔███╔╝██║  ██║██║ ╚██╗██║ ╚████║██║ ╚████║██║██║ ╚████║╚██████╔╝
-                     ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═══╝╚═╝╚═╝  ╚═══╝ ╚═════╝
-                        """);
+                    ██╗██╗ █████╗ ██████╗ ███╗ ██╗███╗ ██╗██╗███╗ ██╗ ██████╗
+                    ██║██║██╔══██╗██╔══██╗████╗██║████╗██║██║████╗██║██╔════╝
+                    ██║ █╗ ██║███████║██████╔╝██╔██╗ ██║██╔██╗ ██║██║██╔██╗ ██║██║███╗
+                    ██║███╗██║██╔══██║██╔═██║ ██║╚██╗██║██║╚██╗██║██║██║╚██╗██║██║ ██║
+                    ╚███╔███╔╝██║██║██║ ╚██╗██║ ╚████║██║ ╚████║██║██║ ╚████║╚██████╔╝
+                     ╚══╝╚══╝ ╚═╝╚═╝╚═╝╚═╝╚═╝╚═══╝╚═╝╚═══╝╚═╝╚═╝╚═══╝ ╚═════╝
+                    """);
             System.out.println("WARNING: ReplayShield is already initialized.");
             System.out.println("This will DELETE existing:");
-            System.out.println("  - /etc/replayshield/salt.bin");
-            System.out.println("  - /var/lib/replayshield/secure.db.enc");
+            System.out.println("- /etc/replayshield/salt.bin");
+            System.out.println("- /var/lib/replayshield/secure.db.enc");
             System.out.println("All user data and PW pools will be permanently lost.");
             System.out.print("Are you sure you want to reinitialize? (yes/no): ");
 
@@ -166,7 +170,6 @@ public class Main {
         System.out.println("=== ReplayShield Server Mode ===");
         byte[] key = KeyLoader.verifyAdminPassword();
         AdminKeyHolder.setKey(key);
-
         int port = 8080;
         HttpAuthServer server = new HttpAuthServer(port, key);
         server.start();
@@ -179,17 +182,14 @@ public class Main {
     // MANAGE 모드 (관리자 CLI)
     // ================================
     private static void runManageMode() throws SQLException, ReplayShieldException, NoSuchAlgorithmException {
-        System.out.println("=== ReplayShield Manage CLI ===");
         byte[] key = KeyLoader.verifyAdminPassword();
         AdminKeyHolder.setKey(key);
 
         // Scanner sc = new Scanner(System.in);
         boolean running = true;
-
         while (running) {
             String prompt = "1) Add new user\n2) Manage user\n3) Debug DB dump\n0) Exit\n>";
             int sel = readInt(prompt);
-
             switch (sel) {
                 case 1 ->
                     manageAddUser(key);
@@ -208,7 +208,6 @@ public class Main {
 
     private static void manageAddUser(byte[] key)
             throws SQLException, NoSuchAlgorithmException, ReplayShieldException {
-
         String username;
         while (true) {
             System.out.print("New username (type CANCEL to cancel): ");
@@ -231,7 +230,6 @@ public class Main {
                     exists = rs.next();
                 }
             }
-
             if (exists) {
                 System.out.println("Username already exists. Choose another.");
             } else {
@@ -242,7 +240,6 @@ public class Main {
         // 비밀번호 최소 3개 이상
         System.out.println("Enter at least 3 passwords (blank line to finish):");
         List<char[]> pwList = new ArrayList<>();
-
         while (true) {
             System.out.print("Password #" + (pwList.size() + 1) + ": ");
             char[] input = CONSOLE.readPassword();
@@ -253,6 +250,15 @@ public class Main {
                 }
                 break;
             }
+            System.out.print("Re-enter to confirm: ");
+            char[] confirm = CONSOLE.readPassword();
+            if (!Arrays.equals(input, confirm)) {
+                System.out.println("Passwords did not match. Please try again.");
+                Arrays.fill(input, '\0');
+                Arrays.fill(confirm, '\0');
+                continue;
+            }
+            Arrays.fill(confirm, '\0');
 
             // 중복검사
             boolean duplicate = pwList.stream()
@@ -270,34 +276,32 @@ public class Main {
         // block 수 지정
         int maxPwCount = pwList.size();
         int blockCount;
-
         while (true) {
-            String prompt = "Block count (0 ~ " + (maxPwCount - 1) + "): ";
+            String prompt = "Block count (1 ~ " + (maxPwCount - 1) + "): ";
             blockCount = readInt(prompt);
-            if (blockCount >= 0 && blockCount < maxPwCount) {
+            if (blockCount >= 1 && blockCount < maxPwCount) {
                 break; // 올바른 범위면 반복 종료
             }
-            System.out.println("block_count must be between 0 and " + (maxPwCount - 1));
+            System.out.println("block_count must be between 1 and " + (maxPwCount - 1));
         }
 
         // DB 저장 진행
         try (DbSession session = SecureDbSession.openWritable(key)) {
             Connection conn = session.connection();
             try (PreparedStatement ps = conn.prepareStatement("""
-                        INSERT INTO user_config(username, block_count)
-                        VALUES(?, ?)
+                    INSERT INTO user_config(username, block_count)
+                    VALUES(?, ?)
                     """)) {
                 ps.setString(1, username);
                 ps.setInt(2, blockCount);
                 ps.executeUpdate();
             }
-
             for (char[] pw : pwList) {
                 String hash = PamAuthPasswordUtil.hashPassword(pw);
                 String hint = PamAuthPasswordUtil.makeHint(pw);
                 try (PreparedStatement ps = conn.prepareStatement("""
-                            INSERT INTO password_pool(username, pw_hash, pw_hint, hit_count, blocked)
-                            VALUES(?, ?, ?, 0, 0)
+                        INSERT INTO password_pool(username, pw_hash, pw_hint, hit_count, blocked)
+                        VALUES(?, ?, ?, 0, 0)
                         """)) {
                     ps.setString(1, username);
                     ps.setString(2, hash);
@@ -305,8 +309,11 @@ public class Main {
                     ps.executeUpdate();
                 }
             }
-
             System.out.println("User created: " + username);
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException ignore) {
+            }
         }
 
         // 입력한 암호 삭제
@@ -328,7 +335,6 @@ public class Main {
                 System.out.println("Username required.");
                 continue;
             }
-
             boolean exists;
             try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key);
                     PreparedStatement ps = session.connection()
@@ -338,20 +344,16 @@ public class Main {
                     exists = rs.next();
                 }
             }
-
             if (exists) {
                 break; // 루프 탈출, 해당 사용자로 다음 단계 진행
             }
             System.out.println("User not found.");
         }
-
         boolean running = true;
         while (running) {
-            System.out.println();
             System.out.println("[Manage User: " + username + "]");
-            String prompt = "1) Show PW pool\n2) Add password\n3) Delete password\n4) Change block_count\n0) Back\n> \n\n\n";
+            String prompt = "1) Show PW pool\n2) Add password\n3) Delete password\n4) Change block_count\n0) Back\n>";
             int sel = readInt(prompt);
-
             switch (sel) {
                 case 1 ->
                     showUserPwPool(key, username);
@@ -373,21 +375,23 @@ public class Main {
         try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key)) {
             Connection conn = session.connection();
             try (PreparedStatement ps = conn.prepareStatement("""
-                        SELECT id, pw_hint, hit_count, blocked
-                        FROM password_pool
-                        WHERE username=?
-                        ORDER BY id
+                    SELECT id, pw_hint, hit_count, blocked
+                    FROM password_pool
+                    WHERE username=?
+                    ORDER BY id
                     """)) {
                 ps.setString(1, username);
                 try (ResultSet rs = ps.executeQuery()) {
-                    System.out.println("ID   | HINT       | HIT  | BLOCKED");
+                    System.out.println();
+                    System.out.println("| ID| HINT| HIT | BLOCKED |");
                     while (rs.next()) {
-                        System.out.printf("%-4d | %-10s | %-4d | %s%n",
+                        System.out.printf("|%-4d| %-10s | %-4d| %s|%n",
                                 rs.getInt("id"),
                                 rs.getString("pw_hint"),
                                 rs.getInt("hit_count"),
                                 rs.getInt("blocked") == 1 ? "YES" : "NO");
                     }
+                    System.out.println();
                 }
             }
         }
@@ -421,6 +425,17 @@ public class Main {
                 continue;
             }
 
+            // 2중 확인
+            System.out.print("Confirm password: ");
+            char[] confirm = CONSOLE.readPassword();
+            if (!Arrays.equals(pw, confirm)) {
+                System.out.println("Passwords do not match.");
+                Arrays.fill(pw, '\0');
+                Arrays.fill(confirm, '\0');
+                continue;
+            }
+            Arrays.fill(confirm, '\0');
+
             // 중복검사
             String newHash = PamAuthPasswordUtil.hashPassword(pw);
             if (existingHashes.contains(newHash)) {
@@ -432,12 +447,12 @@ public class Main {
             // 새 암호 INSERT
             String hint = PamAuthPasswordUtil.makeHint(pw);
             Arrays.fill(pw, '\0'); // 사용 후 지우기
+
             // 3) writable 세션에서 INSERT
-            try (var session = SecureDbSession.openWritable(key);
-                    var ps = session.connection().prepareStatement("""
-                                INSERT INTO password_pool(username, pw_hash, pw_hint, hit_count, blocked)
-                                VALUES(?, ?, ?, 0, 0)
-                            """)) {
+            try (var session = SecureDbSession.openWritable(key); var ps = session.connection().prepareStatement("""
+                    INSERT INTO password_pool(username, pw_hash, pw_hint, hit_count, blocked)
+                    VALUES(?, ?, ?, 0, 0)
+                    """)) {
                 ps.setString(1, username);
                 ps.setString(2, newHash);
                 ps.setString(3, hint);
@@ -454,22 +469,20 @@ public class Main {
         // 삭제 대상 암호 선택
         int id;
         while (true) {
+
             // PW Pool 먼저 출력
             showUserPwPool(key, username);
-
             id = readInt("Password ID to delete (0 to cancel): ");
-
             if (id == 0) {
                 System.out.println("Deletion canceled.");
                 return;
             }
-
             if (id > 0) {
                 try (SecureDbSession.DbSession session = SecureDbSession.openWritable(key)) {
                     Connection conn = session.connection();
                     try (PreparedStatement ps = conn.prepareStatement("""
-                                DELETE FROM password_pool
-                                WHERE id = ? AND username = ?
+                            DELETE FROM password_pool
+                            WHERE id = ? AND username = ?
                             """)) {
                         ps.setInt(1, id);
                         ps.setString(2, username);
@@ -481,21 +494,21 @@ public class Main {
                         }
                     }
                 }
+            } else {
+                System.out.println("ID must be positive.");
             }
-
-            System.out.println("ID must be positive.");
         }
-
     }
 
     private static void changeUserBlockCount(byte[] key, String username)
             throws SQLException, ReplayShieldException {
+
         // 현재 PW 갯수 확인
         int pwCount;
         try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key)) {
             Connection conn = session.connection();
             try (PreparedStatement ps = conn.prepareStatement("""
-                        SELECT COUNT(*) FROM password_pool WHERE username=?
+                    SELECT COUNT(*) FROM password_pool WHERE username=?
                     """)) {
                 ps.setString(1, username);
                 try (ResultSet rs = ps.executeQuery()) {
@@ -510,7 +523,6 @@ public class Main {
             System.out.println("Need at least 2 passwords to set block_count.");
             return;
         }
-
         int bc;
         while (true) {
             String prompt = "New block_count (1 ~ " + (pwCount - 1) + "): ";
@@ -525,7 +537,7 @@ public class Main {
         try (DbSession session = SecureDbSession.openWritable(key)) {
             Connection conn = session.connection();
             try (PreparedStatement ps = conn.prepareStatement("""
-                        UPDATE user_config SET block_count=? WHERE username=?
+                    UPDATE user_config SET block_count=? WHERE username=?
                     """)) {
                 ps.setInt(1, bc);
                 ps.setString(2, username);
@@ -559,19 +571,18 @@ public class Main {
                                 rs.getString(1), rs.getInt(2));
                     }
                 }
-
                 System.out.println();
                 System.out.println("--------------------------------------------------");
                 System.out.println("TABLE: password_pool");
                 System.out.println("--------------------------------------------------");
                 try (ResultSet rs = st.executeQuery("""
-                            SELECT id, username, pw_hash, pw_hint, hit_count, blocked
-                            FROM password_pool
-                            ORDER BY username, id
+                        SELECT id, username, pw_hash, pw_hint, hit_count, blocked
+                        FROM password_pool
+                        ORDER BY username, id
                         """)) {
                     while (rs.next()) {
                         System.out.printf(
-                                "ID=%-4d USER=%-15s HASH=%s%n   HINT=%s | hit=%d | blocked=%s%n",
+                                "ID=%-4d USER=%-15s HASH=%s%n HINT=%s | hit=%d | blocked=%s%n",
                                 rs.getInt("id"),
                                 rs.getString("username"),
                                 rs.getString("pw_hash"),
@@ -580,22 +591,21 @@ public class Main {
                                 rs.getInt("blocked") == 1 ? "YES" : "NO");
                     }
                 }
-
                 System.out.println();
                 System.out.println("--------------------------------------------------");
                 System.out.println("TABLE: password_history");
                 System.out.println("--------------------------------------------------");
                 try (ResultSet rs = st.executeQuery("""
-                            SELECT id, username, pw_hash, pw_hint, created_at
-                            FROM password_history
-                            ORDER BY id
+                        SELECT id, username, pw_hash, pw_hint, created_at
+                        FROM password_history
+                        ORDER BY id
                         """)) {
                     while (rs.next()) {
                         long ts = rs.getLong("created_at");
                         String time = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
                                 .format(new Date(ts));
                         System.out.printf(
-                                "ID=%-4d USER=%-15s HASH=%s%n   HINT=%s | time=%s%n",
+                                "ID=%-4d USER=%-15s HASH=%s%n HINT=%s | time=%s%n",
                                 rs.getInt("id"),
                                 rs.getString("username"),
                                 rs.getString("pw_hash"),
@@ -603,7 +613,6 @@ public class Main {
                                 time);
                     }
                 }
-
                 System.out.println("=== END OF DEBUG DUMP ===");
             }
         }
@@ -651,4 +660,14 @@ public class Main {
         }
     }
 
+    private static void consoleClear(String payload) {
+        try {
+            new ProcessBuilder("clear").inheritIO().start().waitFor();
+        } catch (IOException | InterruptedException ignored) {
+        }
+        System.out.println("=== ReplayShield Manage CLI ===");
+        if (payload != null) {
+            System.out.println(payload);
+        }
+    }
 }
