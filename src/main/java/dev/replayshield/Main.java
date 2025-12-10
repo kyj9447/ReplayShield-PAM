@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
@@ -87,8 +88,29 @@ public class Main {
                     }
                     runManageMode();
                 }
-                case "serve" ->
+                case "serve" -> {
                     server = runServerMode(); // server 인스턴스 받음 (종료용)
+
+                    // 서버 유지
+                    synchronized (server) {
+                        try {
+                            server.wait();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            System.out.println("Main thread interrupted. Signaling server to stop.");
+                        }
+                    }
+                }
+                case "password" -> {
+
+                    // 콘솔 사용 가능 먼저 확인
+                    if (CONSOLE == null) {
+                        throw new ReplayShieldException(
+                                ReplayShieldException.ErrorType.CONFIGURATION,
+                                "Interactive console required (TTY not detected)");
+                    }
+                    cacheAdminPassword();
+                }
                 default -> {
                     System.err.println("Unknown command. Use --help.");
                 }
@@ -103,6 +125,7 @@ public class Main {
                 | SQLException exception) {
             ErrorReporter.logError("main", exception);
         } finally {
+            System.out.println("FINALLY3");
             if (server != null) {
                 server.stop(1); // 필요에 따라 delay 지정
             }
@@ -112,10 +135,10 @@ public class Main {
 
     private static final String USAGE = """
             Usage: replayshield <command>
-            initInitialize admin credentials and database
-            manageOpen administrator CLI
-            serve Start HTTP auth server
-            debugdb Dump database contents (debug/test)
+            init : admin credentials and database
+            manage : administrator CLI
+            serve : Start HTTP auth server
+            password : Cache admin password in RAM for headless serve
             """;
 
     // ================================
@@ -166,7 +189,12 @@ public class Main {
     // SERVER 모드
     // ================================
     private static HttpAuthServer runServerMode() throws IOException {
-        byte[] key = KeyLoader.verifyAdminPassword();
+        byte[] key = tryConsumeCachedAdminKey();
+        if (key == null) {
+            throw new ReplayShieldException(
+                    ReplayShieldException.ErrorType.CONFIGURATION,
+                    "No cached admin password found. Run 'replayshield password' before starting the server.");
+        }
         AdminKeyHolder.setKey(key);
         int port = 8080;
         HttpAuthServer server = new HttpAuthServer(port, key);
@@ -174,6 +202,52 @@ public class Main {
         System.out.println("ReplayShield server running on port " + port);
         System.out.println("Use Ctrl+C to stop.");
         return server; // main()에 서버 종료용으로 인스턴스 반환
+    }
+
+    private static void cacheAdminPassword() {
+        consoleClear("[ Cache Admin Password ]");
+        byte[] key = KeyLoader.verifyAdminPassword();
+        Path cachePath = PathResolver.getAdminKeyCacheFile().toPath();
+        try {
+            Path parent = cachePath.getParent();
+            if (parent != null && !Files.exists(parent)) {
+                Files.createDirectories(parent);
+            }
+            Files.write(cachePath, key);
+            try {
+                Files.setPosixFilePermissions(cachePath, PosixFilePermissions.fromString("rw-------"));
+            } catch (UnsupportedOperationException ignored) {
+            }
+            System.out.println("Admin password cached in RAM: " + cachePath);
+            System.out.println("Run 'sudo systemctl start replayshield' before the next reboot to reuse it.");
+        } catch (IOException exception) {
+            throw new ReplayShieldException(
+                    ReplayShieldException.ErrorType.SYSTEM_ENVIRONMENT,
+                    "Failed to cache admin password.",
+                    exception);
+        } finally {
+            Arrays.fill(key, (byte) 0);
+        }
+    }
+
+    private static byte[] tryConsumeCachedAdminKey() {
+        Path cachePath = PathResolver.getAdminKeyCacheFile().toPath();
+        if (!Files.exists(cachePath)) {
+            return null;
+        }
+        try {
+            byte[] key = Files.readAllBytes(cachePath);
+            Files.deleteIfExists(cachePath);
+            if (key.length == 0) {
+                return null;
+            }
+            return key;
+        } catch (IOException exception) {
+            throw new ReplayShieldException(
+                    ReplayShieldException.ErrorType.SYSTEM_ENVIRONMENT,
+                    "Failed to read cached admin password.",
+                    exception);
+        }
     }
 
     // ================================

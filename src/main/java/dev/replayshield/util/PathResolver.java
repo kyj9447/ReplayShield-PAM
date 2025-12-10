@@ -20,6 +20,10 @@ public class PathResolver {
         return new File("/dev/shm/replayshield");
     }
 
+    public static File getAdminKeyCacheFile() {
+        return new File(getMemoryDbDir(), "admin.key");
+    }
+
     // 메모리 영역에 [복호화된 DB]용 임시 파일 생성
     public static Path createMemoryDbTempFile() {
         File dir = getMemoryDbDir();
