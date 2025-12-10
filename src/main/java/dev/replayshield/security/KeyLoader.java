@@ -214,7 +214,6 @@ public class KeyLoader {
             EncryptDecrypt.decryptFile(currentKey, encFile, tmp);
             EncryptDecrypt.encryptFile(newKey, tmp, encFile);
             saveSalt(newSalt);
-            System.out.println("Admin password updated.");
             return newKey;
         } finally {
             Arrays.fill(newSalt, (byte) 0);

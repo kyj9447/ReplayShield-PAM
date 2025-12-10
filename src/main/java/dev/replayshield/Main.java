@@ -88,10 +88,6 @@ public class Main {
                 }
                 case "serve" ->
                     server = runServerMode(); // server 인스턴스 받음 (종료용)
-                case "debugdb" ->
-
-                    // ============[TEST]==============
-                    runDebugDbDump();
                 default -> {
                     System.err.println("Unknown command. Use --help.");
                 }
@@ -204,13 +200,9 @@ public class Main {
                 case 2 ->
                     manageUserMenu(key);
                 case 3 ->
-                    runDebugDbDumpInternal(key);
+                    manageDebugDbDumpInternal(key);
                 case 4 -> {
-                    byte[] updated = KeyLoader.changeAdminPassword(key);
-                    if (updated != null) {
-                        key = updated;
-                        AdminKeyHolder.setKey(updated);
-                    }
+                    manageChangeAdminPassword(key);
                 }
                 case 0 ->
                     running = false;
@@ -569,13 +561,7 @@ public class Main {
     // ================================
     // DEBUG DB (테스트용)
     // ================================
-    private static void runDebugDbDump() throws SQLException, ReplayShieldException {
-        byte[] key = KeyLoader.verifyAdminPassword();
-        AdminKeyHolder.setKey(key);
-        runDebugDbDumpInternal(key);
-    }
-
-    private static void runDebugDbDumpInternal(byte[] key) throws SQLException, ReplayShieldException {
+    private static void manageDebugDbDumpInternal(byte[] key) throws SQLException, ReplayShieldException {
         consoleClear();
         try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key)) {
             Connection conn = session.connection();
@@ -586,7 +572,7 @@ public class Main {
                 try (ResultSet rs = st.executeQuery(
                         "SELECT username, block_count FROM user_config ORDER BY username")) {
                     System.out.println("+----------------------+--------------+");
-                    System.out.println("| USER | block_count |");
+                    System.out.println("|         USER         |  block_count |");
                     System.out.println("+----------------------+--------------+");
                     while (rs.next()) {
                         System.out.printf("| %-20s | %-12d |%n",
@@ -606,7 +592,7 @@ public class Main {
                     System.out.println(
                             "+------+-----------------+----------------------------------------------+----------------------+-------+---------+");
                     System.out.println(
-                            "| ID | USER | PW HASH | HINT | HIT | BLOCKED |");
+                            "|  ID  |       USER      |                    PW HASH                   |         HINT         |  HIT  | BLOCKED |");
                     System.out.println(
                             "+------+-----------------+----------------------------------------------+----------------------+-------+---------+");
                     while (rs.next()) {
@@ -634,7 +620,7 @@ public class Main {
                     System.out.println(
                             "+------+-----------------+----------------------------------------------+----------------------+-------------------+");
                     System.out.println(
-                            "| ID | USER | PW HASH | HINT | TIME |");
+                            "|  ID  |       USER      |                    PW HASH                   |          HINT        |        TIME       |");
                     System.out.println(
                             "+------+-----------------+----------------------------------------------+----------------------+-------------------+");
                     while (rs.next()) {
@@ -655,6 +641,15 @@ public class Main {
                 System.out.println("\n=== END OF DEBUG DUMP ===");
             }
         }
+    }
+
+    // 암호 변경
+    private static void manageChangeAdminPassword(byte[] key) throws SQLException, ReplayShieldException {
+        byte[] updated = KeyLoader.changeAdminPassword(key);
+        if (updated != null) {
+            AdminKeyHolder.setKey(updated);
+        }
+        consoleClear("Admin password updated.");
     }
 
     // ================================
