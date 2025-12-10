@@ -23,6 +23,7 @@ public class Db {
             String url = "jdbc:sqlite:" + dbPath.toAbsolutePath();
             Connection conn = DriverManager.getConnection(url);
 
+            // 파일이 없거나 빈 파일이면 새 테이블 생성
             if (newDb) {
                 initSchema(conn);
             } else {

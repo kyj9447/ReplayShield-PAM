@@ -48,6 +48,7 @@ public class KeyLoader {
         return Main.CONSOLE.readPassword();
     }
 
+    // 평문 패스워드 Salt 암호화
     private static byte[] deriveKey(char[] pw, byte[] salt) {
         try {
             PBEKeySpec spec = new PBEKeySpec(pw, salt, ITER, KEY_LEN);
@@ -162,6 +163,7 @@ public class KeyLoader {
             // 마스터 테이블 읽기 시도
             verifySqliteMasterReadable(session.connection());
         } catch (ReplayShieldException exception) {
+            // DB 세션 열기 실패
             throw new ReplayShieldException(
                     ErrorType.ADMIN_AUTH,
                     "Invalid admin password (DB decryption failed)",
@@ -173,11 +175,11 @@ public class KeyLoader {
         try (Statement st = conn.createStatement();) {
             st.executeQuery("SELECT name FROM sqlite_master LIMIT 1");
         } catch (SQLException exception) {
+            // DB 마스터 테이블 읽기 실패
             throw new ReplayShieldException(
                     ReplayShieldException.ErrorType.DATABASE_ACCESS,
                     "Failed to verify SQLite master table",
                     exception);
         }
     }
-
 }
