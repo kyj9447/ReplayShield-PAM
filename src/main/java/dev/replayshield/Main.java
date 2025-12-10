@@ -545,6 +545,7 @@ public class Main {
 
     private static void deleteUserPassword(byte[] key, String username)
             throws SQLException, ReplayShieldException {
+
         // 삭제 대상 암호 선택
         int id;
         while (true) {
@@ -557,20 +558,89 @@ public class Main {
                 return;
             }
             if (id > 0) {
+                int passwordCount;
+                int blockCount;
+                try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key)) {
+                    Connection conn = session.connection();
+
+                    // 현재 패스워드 풀 갯수 체크
+                    try (PreparedStatement ps = conn.prepareStatement("""
+                            SELECT COUNT(*) FROM password_pool WHERE username=?
+                            """)) {
+                        ps.setString(1, username);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            rs.next();
+                            passwordCount = rs.getInt(1);
+                        }
+                    }
+
+                    // 현재 블록 카운트 체크
+                    try (PreparedStatement ps = conn.prepareStatement("""
+                            SELECT block_count FROM user_config WHERE username=?
+                            """)) {
+                        ps.setString(1, username);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            if (!rs.next()) {
+                                consoleClear("[ User not found. ]");
+                                return;
+                            }
+                            blockCount = rs.getInt(1);
+                        }
+                    }
+
+                }
+
+                // 최소조건 만족 체크
+                if (passwordCount <= MIN_PASSWORD_POOL_SIZE) {
+                    consoleClear("[ Need at least " + MIN_PASSWORD_POOL_SIZE + " passwords per user. ]");
+                    return;
+                }
+                if (blockCount <= 1) {
+                    consoleClear("[ block_count cannot be reduced below 1. ]");
+                    return;
+                }
+
+                int newBlockCount = blockCount - 1;
+
+                // 결과 저장
                 try (SecureDbSession.DbSession session = SecureDbSession.openWritable(key)) {
                     Connection conn = session.connection();
-                    try (PreparedStatement ps = conn.prepareStatement("""
-                            DELETE FROM password_pool
-                            WHERE id = ? AND username = ?
-                            """)) {
-                        ps.setInt(1, id);
-                        ps.setString(2, username);
-                        int n = ps.executeUpdate(); // 삭제된 행 수
-                        if (n > 0) {
-                            System.out.println("Password deleted.");
-                        } else {
-                            System.out.println("No such password for this user.");
+                    boolean originalAutoCommit = conn.getAutoCommit(); // 자동커밋상태 기록
+                    conn.setAutoCommit(false); // 자동커밋 끔
+                    try {
+
+                        // 1. 패스워드 풀 삭제 시도
+                        int deleted;
+                        try (PreparedStatement ps = conn.prepareStatement("""
+                                DELETE FROM password_pool
+                                WHERE id = ? AND username = ?
+                                """)) {
+                            ps.setInt(1, id);
+                            ps.setString(2, username);
+                            deleted = ps.executeUpdate(); // 삭제된 행 수
                         }
+                        // 2. 블록 카운트 감소 및 커밋 시도
+                        if (deleted > 0) {
+                            try (PreparedStatement ps = conn.prepareStatement("""
+                                    UPDATE user_config SET block_count=? WHERE username=?
+                                    """)) {
+                                ps.setInt(1, newBlockCount);
+                                ps.setString(2, username);
+                                ps.executeUpdate();
+                            }
+                            conn.commit(); // DB 커밋
+                            consoleClear("[ Password deleted. block_count=" + newBlockCount + " ]");
+                            return;
+                        }
+                        // 삭제 실패시 롤백
+                        conn.rollback();
+                        System.out.println("No such password for this user.");
+                    } catch (SQLException exception) {
+                        // 예외 발생시 롤백
+                        conn.rollback();
+                        throw exception;
+                    } finally {
+                        conn.setAutoCommit(originalAutoCommit); // 원래 자동커밋 상태로 복원
                     }
                 }
             } else {
