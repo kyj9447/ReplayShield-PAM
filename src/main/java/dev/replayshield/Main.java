@@ -35,6 +35,7 @@ public class Main {
 
     // 콘솔 선언
     public static final Console CONSOLE = System.console();
+    private static final int MIN_PASSWORD_POOL_SIZE = 3;
 
     public static void main(String[] args) {
         Thread.setDefaultUncaughtExceptionHandler(
@@ -189,8 +190,9 @@ public class Main {
             String prompt = """
                     1) Add new user
                     2) Manage user
-                    3) Debug DB dump
+                    3) Delete user
                     4) Change admin password
+                    5) Debug DB dump
                     0) Exit
                     >""";
             int sel = readInt(prompt);
@@ -200,10 +202,11 @@ public class Main {
                 case 2 ->
                     manageUserMenu(key);
                 case 3 ->
-                    manageDebugDbDumpInternal(key);
-                case 4 -> {
+                    manageDeleteUser(key);
+                case 4 ->
                     manageChangeAdminPassword(key);
-                }
+                case 5 ->
+                    manageDebugDbDumpInternal(key);
                 case 0 ->
                     running = false;
                 default ->
@@ -247,14 +250,14 @@ public class Main {
         }
 
         // 비밀번호 최소 3개 이상
-        System.out.println("Enter at least 3 passwords (blank line to finish):");
+        System.out.println("Enter at least " + MIN_PASSWORD_POOL_SIZE + " passwords (blank line to finish):");
         List<char[]> pwList = new ArrayList<>();
         while (true) {
             System.out.print("Password #" + (pwList.size() + 1) + ": ");
             char[] input = CONSOLE.readPassword();
             if (input.length == 0) {
-                if (pwList.size() < 3) {
-                    System.out.println("At least 3 passwords are required.");
+                if (pwList.size() < MIN_PASSWORD_POOL_SIZE) {
+                    System.out.println("At least " + MIN_PASSWORD_POOL_SIZE + " passwords are required.");
                     continue;
                 }
                 break;
@@ -324,6 +327,71 @@ public class Main {
         // 입력한 암호 삭제
         for (char[] pw : pwList) {
             Arrays.fill(pw, '\0');
+        }
+    }
+
+    private static void manageDeleteUser(byte[] key) throws SQLException, ReplayShieldException {
+        consoleClear("[ Delete User ]");
+        while (true) {
+            System.out.print("Username to delete (type CANCEL to cancel): ");
+            String username = CONSOLE.readLine().trim();
+            if ("CANCEL".equalsIgnoreCase(username)) {
+                consoleClear();
+                return;
+            }
+            if (username.isEmpty()) {
+                System.out.println("Username required.");
+                continue;
+            }
+            boolean exists;
+            try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key);
+                    PreparedStatement ps = session.connection()
+                            .prepareStatement("SELECT 1 FROM user_config WHERE username=?")) {
+                ps.setString(1, username);
+                try (ResultSet rs = ps.executeQuery()) {
+                    exists = rs.next();
+                }
+            }
+            if (!exists) {
+                System.out.println("User not found.");
+                continue;
+            }
+            System.out.print("Type DELETE to confirm removal of '" + username + "': ");
+            String confirm = CONSOLE.readLine().trim();
+            if (!"DELETE".equalsIgnoreCase(confirm)) {
+                consoleClear("[ Deletion aborted. ]");
+                return;
+            }
+            try (DbSession session = SecureDbSession.openWritable(key)) {
+                Connection conn = session.connection();
+                boolean originalAutoCommit = conn.getAutoCommit();
+                conn.setAutoCommit(false);
+                try {
+                    try (PreparedStatement ps = conn.prepareStatement(
+                            "DELETE FROM password_pool WHERE username=?")) {
+                        ps.setString(1, username);
+                        ps.executeUpdate();
+                    }
+                    try (PreparedStatement ps = conn.prepareStatement(
+                            "DELETE FROM password_history WHERE username=?")) {
+                        ps.setString(1, username);
+                        ps.executeUpdate();
+                    }
+                    try (PreparedStatement ps = conn.prepareStatement(
+                            "DELETE FROM user_config WHERE username=?")) {
+                        ps.setString(1, username);
+                        ps.executeUpdate();
+                    }
+                    conn.commit();
+                } catch (SQLException exception) {
+                    conn.rollback();
+                    throw exception;
+                } finally {
+                    conn.setAutoCommit(originalAutoCommit);
+                }
+            }
+            consoleClear("[ User deleted: " + username + " ]");
+            return;
         }
     }
 
