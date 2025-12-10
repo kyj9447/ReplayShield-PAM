@@ -192,7 +192,7 @@ public class Main {
                     2) Manage user
                     3) Delete user
                     4) Change admin password
-                    5) Debug DB dump
+                    9) DB dump
                     0) Exit
                     >""";
             int sel = readInt(prompt);
@@ -205,7 +205,7 @@ public class Main {
                     manageDeleteUser(key);
                 case 4 ->
                     manageChangeAdminPassword(key);
-                case 5 ->
+                case 9 ->
                     manageDebugDbDumpInternal(key);
                 case 0 ->
                     running = false;
