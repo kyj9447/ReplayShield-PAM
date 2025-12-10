@@ -4,6 +4,7 @@ import java.io.Console;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
@@ -38,6 +39,8 @@ public class Main {
     public static void main(String[] args) {
         Thread.setDefaultUncaughtExceptionHandler(
                 (thread, throwable) -> ErrorReporter.logFatal("Thread " + thread.getName(), throwable));
+
+        consoleClear();
 
         // sudo 검사
         if (!"root".equals(System.getProperty("user.name"))) {
@@ -122,7 +125,6 @@ public class Main {
     // INIT 모드
     // ================================
     private static void runInitMode() throws IOException {
-        System.out.println("=== ReplayShield Initial Setup ===");
         boolean saltExists = KeyLoader.saltExists(); // salt파일 존재 확인
         boolean encDbExists = PathResolver.getEncryptedDbFile().exists(); // db파일 존재 확인
         if (saltExists || encDbExists) {
@@ -132,7 +134,7 @@ public class Main {
                     ██║ █╗ ██║███████║██████╔╝██╔██╗ ██║██╔██╗ ██║██║██╔██╗ ██║██║███╗
                     ██║███╗██║██╔══██║██╔═██║ ██║╚██╗██║██║╚██╗██║██║██║╚██╗██║██║ ██║
                     ╚███╔███╔╝██║██║██║ ╚██╗██║ ╚████║██║ ╚████║██║██║ ╚████║╚██████╔╝
-                     ╚══╝╚══╝ ╚═╝╚═╝╚═╝╚═╝╚═╝╚═══╝╚═╝╚═══╝╚═╝╚═╝╚═══╝ ╚═════╝
+                    ╚══╝╚══╝ ╚═╝╚═╝╚═╝╚═╝╚═╝╚═══╝╚═╝╚═══╝╚═╝╚═╝╚═══╝ ╚═════╝
                     """);
             System.out.println("WARNING: ReplayShield is already initialized.");
             System.out.println("This will DELETE existing:");
@@ -167,7 +169,6 @@ public class Main {
     // SERVER 모드
     // ================================
     private static HttpAuthServer runServerMode() throws IOException {
-        System.out.println("=== ReplayShield Server Mode ===");
         byte[] key = KeyLoader.verifyAdminPassword();
         AdminKeyHolder.setKey(key);
         int port = 8080;
@@ -184,11 +185,18 @@ public class Main {
     private static void runManageMode() throws SQLException, ReplayShieldException, NoSuchAlgorithmException {
         byte[] key = KeyLoader.verifyAdminPassword();
         AdminKeyHolder.setKey(key);
+        consoleClear();
 
         // Scanner sc = new Scanner(System.in);
         boolean running = true;
         while (running) {
-            String prompt = "1) Add new user\n2) Manage user\n3) Debug DB dump\n0) Exit\n>";
+            String prompt = """
+                    1) Add new user
+                    2) Manage user
+                    3) Debug DB dump
+                    4) Change admin password
+                    0) Exit
+                    >""";
             int sel = readInt(prompt);
             switch (sel) {
                 case 1 ->
@@ -197,6 +205,13 @@ public class Main {
                     manageUserMenu(key);
                 case 3 ->
                     runDebugDbDumpInternal(key);
+                case 4 -> {
+                    byte[] updated = KeyLoader.changeAdminPassword(key);
+                    if (updated != null) {
+                        key = updated;
+                        AdminKeyHolder.setKey(updated);
+                    }
+                }
                 case 0 ->
                     running = false;
                 default ->
@@ -208,11 +223,13 @@ public class Main {
 
     private static void manageAddUser(byte[] key)
             throws SQLException, NoSuchAlgorithmException, ReplayShieldException {
+        consoleClear("[ Add New User ]");
         String username;
         while (true) {
             System.out.print("New username (type CANCEL to cancel): ");
             username = CONSOLE.readLine().trim();
             if ("CANCEL".equalsIgnoreCase(username)) {
+                consoleClear();
                 return;
             }
             if (username.isEmpty()) {
@@ -309,11 +326,7 @@ public class Main {
                     ps.executeUpdate();
                 }
             }
-            System.out.println("User created: " + username);
-            try {
-                Thread.sleep(1000);
-            } catch (InterruptedException ignore) {
-            }
+            consoleClear("[ User created : " + username + " ]");
         }
 
         // 입력한 암호 삭제
@@ -329,6 +342,7 @@ public class Main {
             System.out.print("Target username (type CANCEL to cancel): ");
             username = CONSOLE.readLine().trim();
             if ("CANCEL".equalsIgnoreCase(username)) {
+                consoleClear();
                 return; // 사용자 취소
             }
             if (username.isEmpty()) {
@@ -345,13 +359,14 @@ public class Main {
                 }
             }
             if (exists) {
+                consoleClear();
                 break; // 루프 탈출, 해당 사용자로 다음 단계 진행
             }
             System.out.println("User not found.");
         }
         boolean running = true;
         while (running) {
-            System.out.println("[Manage User: " + username + "]");
+            System.out.println("[ Manage User: " + username + " ]");
             String prompt = "1) Show PW pool\n2) Add password\n3) Delete password\n4) Change block_count\n0) Back\n>";
             int sel = readInt(prompt);
             switch (sel) {
@@ -369,10 +384,12 @@ public class Main {
                     System.out.println("Unknown menu.");
             }
         }
+        consoleClear();
     }
 
     private static void showUserPwPool(byte[] key, String username) throws SQLException, ReplayShieldException {
         try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key)) {
+            consoleClear();
             Connection conn = session.connection();
             try (PreparedStatement ps = conn.prepareStatement("""
                     SELECT id, pw_hint, hit_count, blocked
@@ -383,14 +400,17 @@ public class Main {
                 ps.setString(1, username);
                 try (ResultSet rs = ps.executeQuery()) {
                     System.out.println();
-                    System.out.println("| ID| HINT| HIT | BLOCKED |");
+                    System.out.println("+------+------------+-------+----------+");
+                    System.out.println("| ID   | HINT       | HIT   | BLOCKED  |");
+                    System.out.println("+------+------------+-------+----------+");
                     while (rs.next()) {
-                        System.out.printf("|%-4d| %-10s | %-4d| %s|%n",
+                        System.out.printf("| %-4d | %-10s | %-5d | %-8s |%n",
                                 rs.getInt("id"),
                                 rs.getString("pw_hint"),
                                 rs.getInt("hit_count"),
                                 rs.getInt("blocked") == 1 ? "YES" : "NO");
                     }
+                    System.out.println("+------+------------+-------+----------+");
                     System.out.println();
                 }
             }
@@ -399,7 +419,7 @@ public class Main {
 
     private static void addUserPassword(byte[] key, String username)
             throws SQLException, NoSuchAlgorithmException, ReplayShieldException {
-
+        consoleClear("[ Manage User: " + username + " ]");
         // 1) 기존 해시 목록 수집
         Set<String> existingHashes = new HashSet<>();
         try (var session = SecureDbSession.openReadOnly(key);
@@ -458,14 +478,13 @@ public class Main {
                 ps.setString(3, hint);
                 ps.executeUpdate();
             }
-            System.out.println("Password added.");
+            consoleClear("[ Password added. ]");
             break;
         }
     }
 
     private static void deleteUserPassword(byte[] key, String username)
             throws SQLException, ReplayShieldException {
-
         // 삭제 대상 암호 선택
         int id;
         while (true) {
@@ -474,7 +493,7 @@ public class Main {
             showUserPwPool(key, username);
             id = readInt("Password ID to delete (0 to cancel): ");
             if (id == 0) {
-                System.out.println("Deletion canceled.");
+                consoleClear("[ Deletion canceled. ]");
                 return;
             }
             if (id > 0) {
@@ -542,7 +561,7 @@ public class Main {
                 ps.setInt(1, bc);
                 ps.setString(2, username);
                 ps.executeUpdate();
-                System.out.println("block_count updated.");
+                consoleClear("block_count updated.");
             }
         }
     }
@@ -551,13 +570,13 @@ public class Main {
     // DEBUG DB (테스트용)
     // ================================
     private static void runDebugDbDump() throws SQLException, ReplayShieldException {
-        System.out.println("=== ReplayShield DB Debug Dump ===");
         byte[] key = KeyLoader.verifyAdminPassword();
         AdminKeyHolder.setKey(key);
         runDebugDbDumpInternal(key);
     }
 
     private static void runDebugDbDumpInternal(byte[] key) throws SQLException, ReplayShieldException {
+        consoleClear();
         try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key)) {
             Connection conn = session.connection();
             try (Statement st = conn.createStatement()) {
@@ -566,10 +585,14 @@ public class Main {
                 System.out.println("--------------------------------------------------");
                 try (ResultSet rs = st.executeQuery(
                         "SELECT username, block_count FROM user_config ORDER BY username")) {
+                    System.out.println("+----------------------+--------------+");
+                    System.out.println("| USER | block_count |");
+                    System.out.println("+----------------------+--------------+");
                     while (rs.next()) {
-                        System.out.printf("USER=%-20s | block_count=%d%n",
+                        System.out.printf("| %-20s | %-12d |%n",
                                 rs.getString(1), rs.getInt(2));
                     }
+                    System.out.println("+----------------------+--------------+");
                 }
                 System.out.println();
                 System.out.println("--------------------------------------------------");
@@ -580,9 +603,15 @@ public class Main {
                         FROM password_pool
                         ORDER BY username, id
                         """)) {
+                    System.out.println(
+                            "+------+-----------------+----------------------------------------------+----------------------+-------+---------+");
+                    System.out.println(
+                            "| ID | USER | PW HASH | HINT | HIT | BLOCKED |");
+                    System.out.println(
+                            "+------+-----------------+----------------------------------------------+----------------------+-------+---------+");
                     while (rs.next()) {
                         System.out.printf(
-                                "ID=%-4d USER=%-15s HASH=%s%n HINT=%s | hit=%d | blocked=%s%n",
+                                "| %-4d | %-15s | %-44s | %-20s | %-5d | %-7s |%n",
                                 rs.getInt("id"),
                                 rs.getString("username"),
                                 rs.getString("pw_hash"),
@@ -590,6 +619,8 @@ public class Main {
                                 rs.getInt("hit_count"),
                                 rs.getInt("blocked") == 1 ? "YES" : "NO");
                     }
+                    System.out.println(
+                            "+------+-----------------+----------------------------------------------+----------------------+-------+---------+");
                 }
                 System.out.println();
                 System.out.println("--------------------------------------------------");
@@ -600,20 +631,28 @@ public class Main {
                         FROM password_history
                         ORDER BY id
                         """)) {
+                    System.out.println(
+                            "+------+-----------------+----------------------------------------------+----------------------+-------------------+");
+                    System.out.println(
+                            "| ID | USER | PW HASH | HINT | TIME |");
+                    System.out.println(
+                            "+------+-----------------+----------------------------------------------+----------------------+-------------------+");
                     while (rs.next()) {
                         long ts = rs.getLong("created_at");
                         String time = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
                                 .format(new Date(ts));
                         System.out.printf(
-                                "ID=%-4d USER=%-15s HASH=%s%n HINT=%s | time=%s%n",
+                                "| %-4d | %-15s | %-44s | %-20s | %-19s |%n",
                                 rs.getInt("id"),
                                 rs.getString("username"),
                                 rs.getString("pw_hash"),
                                 rs.getString("pw_hint"),
                                 time);
                     }
+                    System.out.println(
+                            "+------+-----------------+----------------------------------------------+----------------------+-------------------+");
                 }
-                System.out.println("=== END OF DEBUG DUMP ===");
+                System.out.println("\n=== END OF DEBUG DUMP ===");
             }
         }
     }
@@ -658,6 +697,21 @@ public class Main {
                 System.out.println("Invalid number. Please enter an integer.");
             }
         }
+    }
+
+    public static void deleteQuietly(Path tmp) {
+        try {
+            Files.deleteIfExists(tmp);
+        } catch (IOException ignored) {
+        }
+    }
+
+    private static void consoleClear() {
+        try {
+            new ProcessBuilder("clear").inheritIO().start().waitFor();
+        } catch (IOException | InterruptedException ignored) {
+        }
+        System.out.println("=== ReplayShield Manage CLI ===");
     }
 
     private static void consoleClear(String payload) {

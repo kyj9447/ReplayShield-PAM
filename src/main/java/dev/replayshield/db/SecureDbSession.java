@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
 
+import dev.replayshield.Main;
 import dev.replayshield.security.EncryptDecrypt;
 import dev.replayshield.util.PathResolver;
 import dev.replayshield.util.ReplayShieldException;
@@ -28,10 +29,10 @@ public final class SecureDbSession {
             Connection conn = Db.open(tmp);
             return new DbSession(key, encFile, tmp, conn, false);
         } catch (ReplayShieldException exception) {
-            deleteQuietly(tmp);
+            Main.deleteQuietly(tmp);
             throw exception;
         } catch (Exception exception) {
-            deleteQuietly(tmp);
+            Main.deleteQuietly(tmp);
             throw new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to open read-only DB session",
                     exception);
         }
@@ -48,10 +49,10 @@ public final class SecureDbSession {
             Connection conn = Db.open(tmp);
             return new DbSession(key, encFile, tmp, conn, true);
         } catch (ReplayShieldException exception) {
-            deleteQuietly(tmp);
+            Main.deleteQuietly(tmp);
             throw exception;
         } catch (Exception exception) {
-            deleteQuietly(tmp);
+            Main.deleteQuietly(tmp);
             throw new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to open writable DB session", exception);
         }
     }
@@ -131,13 +132,6 @@ public final class SecureDbSession {
             }
             existing.addSuppressed(next);
             return existing;
-        }
-    }
-
-    private static void deleteQuietly(Path tmp) {
-        try {
-            Files.deleteIfExists(tmp);
-        } catch (IOException ignored) {
         }
     }
 }
