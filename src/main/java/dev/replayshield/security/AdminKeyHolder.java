@@ -5,6 +5,7 @@ import java.util.Arrays;
 public class AdminKeyHolder {
 
     // volatile 사용
+    @SuppressWarnings("VolatileArrayField")
     private static volatile byte[] key;
 
     public static void setKey(byte[] k) {
