@@ -22,7 +22,9 @@ public class HttpAuthServer {
         InetSocketAddress addr = new InetSocketAddress("127.0.0.1", port);
         this.server = HttpServer.create(addr, 0);
 
+        // '/auth'경로에 handleAuth()를 핸들러로 등록
         this.server.createContext("/auth", this::handleAuth);
+        // 요청 발생시 새 스레드 풀 생성하게 설정
         this.server.setExecutor(Executors.newCachedThreadPool());
     }
 
@@ -34,7 +36,9 @@ public class HttpAuthServer {
                 return;
             }
 
+            // 실제 인증로직 실행
             String result = authHandler.handleHttpPost(exchange);
+
             byte[] body = result.getBytes();
             exchange.sendResponseHeaders(200, body.length);
             try (OutputStream os = exchange.getResponseBody()) {
