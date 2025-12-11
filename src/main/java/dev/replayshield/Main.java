@@ -197,7 +197,7 @@ public class Main {
                     "No cached admin password found. Run 'replayshield password' before starting the server.");
         }
         AdminKeyHolder.setKey(key);
-        int port = 8080;
+        int port = 4444;
         HttpAuthServer server = new HttpAuthServer(port, key);
         server.start();
         System.out.println("ReplayShield server running on port " + port);
