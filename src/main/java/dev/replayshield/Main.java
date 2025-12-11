@@ -27,6 +27,7 @@ import dev.replayshield.db.SecureDbSession.DbSession;
 import dev.replayshield.security.AdminKeyHolder;
 import dev.replayshield.security.KeyLoader;
 import dev.replayshield.server.HttpAuthServer;
+import dev.replayshield.server.PamAuthHandler;
 import dev.replayshield.util.ErrorReporter;
 import dev.replayshield.util.PathResolver;
 import dev.replayshield.util.ReplayShieldException;
@@ -525,8 +526,9 @@ public class Main {
         try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key)) {
             consoleClear();
             Connection conn = session.connection();
+            SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
             try (PreparedStatement ps = conn.prepareStatement("""
-                    SELECT id, pw_hint, hit_count, blocked
+                    SELECT id, pw_hint, hit_count, blocked, last_use
                     FROM password_pool
                     WHERE username=?
                     ORDER BY id
@@ -534,17 +536,22 @@ public class Main {
                 ps.setString(1, username);
                 try (ResultSet rs = ps.executeQuery()) {
                     System.out.println();
-                    System.out.println("+------+------------+-------+----------+");
-                    System.out.println("| ID   | HINT       | HIT   | BLOCKED  |");
-                    System.out.println("+------+------------+-------+----------+");
+                    System.out.println("+------+------------+-------+----------+-------------------+");
+                    System.out.println("| ID   | HINT       | HIT   | BLOCKED  | LAST USE          |");
+                    System.out.println("+------+------------+-------+----------+-------------------+");
                     while (rs.next()) {
-                        System.out.printf("| %-4d | %-10s | %-5d | %-8s |%n",
+                        long lastUseValue = rs.getLong("last_use");
+                        String lastUse = lastUseValue > 0
+                                ? sdf.format(new Date(lastUseValue))
+                                : "-";
+                        System.out.printf("| %-4d | %-10s | %-5d | %-8s | %-17s |%n",
                                 rs.getInt("id"),
                                 rs.getString("pw_hint"),
                                 rs.getInt("hit_count"),
-                                rs.getInt("blocked") == 1 ? "YES" : "NO");
+                                rs.getInt("blocked") == 1 ? "YES" : "NO",
+                                lastUse);
                     }
-                    System.out.println("+------+------------+-------+----------+");
+                    System.out.println("+------+------------+-------+----------+-------------------+");
                     System.out.println();
                 }
             }
@@ -702,6 +709,8 @@ public class Main {
                                 ps.setString(2, username);
                                 ps.executeUpdate();
                             }
+                            // block 대상 계산
+                            PamAuthHandler.refreshBlockedState(conn, username, newBlockCount);
                             conn.commit(); // DB 커밋
                             consoleClear("[ Password deleted. block_count=" + newBlockCount + " ]");
                             return;
@@ -765,8 +774,9 @@ public class Main {
                 ps.setInt(1, bc);
                 ps.setString(2, username);
                 ps.executeUpdate();
-                consoleClear("block_count updated.");
             }
+            PamAuthHandler.refreshBlockedState(conn, username, bc);
+            consoleClear("block_count updated.");
         }
     }
 
@@ -778,6 +788,7 @@ public class Main {
         try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key)) {
             Connection conn = session.connection();
             try (Statement st = conn.createStatement()) {
+                SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
                 System.out.println("--------------------------------------------------");
                 System.out.println("TABLE: user_config");
                 System.out.println("--------------------------------------------------");
@@ -797,28 +808,31 @@ public class Main {
                 System.out.println("TABLE: password_pool");
                 System.out.println("--------------------------------------------------");
                 try (ResultSet rs = st.executeQuery("""
-                        SELECT id, username, pw_hash, pw_hint, hit_count, blocked
+                        SELECT id, username, pw_hash, pw_hint, hit_count, blocked, last_use
                         FROM password_pool
                         ORDER BY username, id
                         """)) {
                     System.out.println(
-                            "+------+-----------------+----------------------------------------------+----------------------+-------+---------+");
+                            "+------+-----------------+----------------------------------------------+----------------------+-------+---------+-------------------+");
                     System.out.println(
-                            "|  ID  |       USER      |                    PW HASH                   |         HINT         |  HIT  | BLOCKED |");
+                            "|  ID  |       USER      |                    PW HASH                   |         HINT         |  HIT  | BLOCKED | LAST USE          |");
                     System.out.println(
-                            "+------+-----------------+----------------------------------------------+----------------------+-------+---------+");
+                            "+------+-----------------+----------------------------------------------+----------------------+-------+---------+-------------------+");
                     while (rs.next()) {
+                        long lastUseValue = rs.getLong("last_use");
+                        String lastUse = lastUseValue > 0 ? sdf.format(new Date(lastUseValue)) : "-";
                         System.out.printf(
-                                "| %-4d | %-15s | %-44s | %-20s | %-5d | %-7s |%n",
+                                "| %-4d | %-15s | %-44s | %-20s | %-5d | %-7s | %-17s |%n",
                                 rs.getInt("id"),
                                 rs.getString("username"),
                                 rs.getString("pw_hash"),
                                 rs.getString("pw_hint"),
                                 rs.getInt("hit_count"),
-                                rs.getInt("blocked") == 1 ? "YES" : "NO");
+                                rs.getInt("blocked") == 1 ? "YES" : "NO",
+                                lastUse);
                     }
                     System.out.println(
-                            "+------+-----------------+----------------------------------------------+----------------------+-------+---------+");
+                            "+------+-----------------+----------------------------------------------+----------------------+-------+---------+-------------------+");
                 }
                 System.out.println();
                 System.out.println("--------------------------------------------------");

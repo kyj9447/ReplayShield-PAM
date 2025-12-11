@@ -60,22 +60,41 @@ class PamAuthHandlerTest {
             assertEquals("PASS", result);
             assertEquals(1, countHistory(conn, "alice"));
             assertEquals(1, fetchHitCount(conn, pwId));
+            assertTrue(fetchLastUse(conn, pwId) > 0);
         }
     }
 
     @Test
-    void returnsKickWhenPasswordRecentlyUsed() throws Exception {
+    void returnsFailWhenPasswordBlocked() throws Exception {
         try (Connection conn = openConnection()) {
-            insertUser(conn, "bob", 2);
+            insertUser(conn, "bob", 1);
             int pwId = insertPassword(conn, "bob", "hunter2");
-            insertHistory(conn, "bob", "hunter2", System.currentTimeMillis());
+
+            assertEquals("PASS", invokeDoAuth(conn, "bob", "hunter2"));
+            long prevLastUse = fetchLastUse(conn, pwId);
+            assertTrue(isBlocked(conn, pwId));
 
             int beforeHistory = countHistory(conn, "bob");
             String result = invokeDoAuth(conn, "bob", "hunter2");
 
-            assertEquals("KICK", result);
+            assertEquals("FAIL", result);
             assertEquals(beforeHistory, countHistory(conn, "bob"));
-            assertEquals(0, fetchHitCount(conn, pwId));
+            assertEquals(1, fetchHitCount(conn, pwId));
+            assertTrue(fetchLastUse(conn, pwId) > prevLastUse);
+            assertTrue(isBlocked(conn, pwId));
+        }
+    }
+
+    @Test
+    void unblocksPasswordsOnceOutsideBlockWindow() throws Exception {
+        try (Connection conn = openConnection()) {
+            insertUser(conn, "cara", 1);
+            insertPassword(conn, "cara", "alpha");
+            insertPassword(conn, "cara", "bravo");
+
+            assertEquals("PASS", invokeDoAuth(conn, "cara", "alpha"));
+            assertEquals("PASS", invokeDoAuth(conn, "cara", "bravo"));
+            assertEquals("PASS", invokeDoAuth(conn, "cara", "alpha"));
         }
     }
 
@@ -117,17 +136,6 @@ class PamAuthHandlerTest {
         }
     }
 
-    private void insertHistory(Connection conn, String username, String password, long createdAt) throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement(
-                "INSERT INTO password_history(username, pw_hash, pw_hint, created_at) VALUES(?, ?, ?, ?)")) {
-            ps.setString(1, username);
-            ps.setString(2, hash(password));
-            ps.setString(3, "hist");
-            ps.setLong(4, createdAt);
-            ps.executeUpdate();
-        }
-    }
-
     private int countHistory(Connection conn, String username) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(
                 "SELECT COUNT(*) FROM password_history WHERE username=?")) {
@@ -146,6 +154,28 @@ class PamAuthHandlerTest {
             try (ResultSet rs = ps.executeQuery()) {
                 rs.next();
                 return rs.getInt(1);
+            }
+        }
+    }
+
+    private long fetchLastUse(Connection conn, int pwId) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT last_use FROM password_pool WHERE id=?")) {
+            ps.setInt(1, pwId);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getLong(1);
+            }
+        }
+    }
+
+    private boolean isBlocked(Connection conn, int pwId) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT blocked FROM password_pool WHERE id=?")) {
+            ps.setInt(1, pwId);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getInt(1) == 1;
             }
         }
     }

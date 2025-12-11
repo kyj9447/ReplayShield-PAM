@@ -67,6 +67,7 @@ public class Db {
                             pw_hint TEXT NOT NULL,
                             hit_count INTEGER NOT NULL DEFAULT 0,
                             blocked INTEGER NOT NULL DEFAULT 0,
+                            last_use INTEGER NOT NULL DEFAULT 0,
                             FOREIGN KEY(username) REFERENCES user_config(username)
                         )
                     """);

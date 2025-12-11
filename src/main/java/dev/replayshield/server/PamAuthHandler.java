@@ -76,7 +76,7 @@ public class PamAuthHandler {
         return map;
     }
 
-    // PASS/FAIL/KICK
+    // PASS/FAIL
     public String authenticate(String username, String password) throws SQLException {
         try (SecureDbSession.DbSession session = SecureDbSession.openWritable(key)) {
             return doAuth(session.connection(), username, password);
@@ -100,12 +100,15 @@ public class PamAuthHandler {
             }
         }
 
+        refreshBlockedState(conn, username, blockCount);
+
         // 2) password_pool에서 해당 패스워드 존재 여부 확인
         int pwId;
         String pwHint;
+        boolean blocked;
 
         try (PreparedStatement ps = conn.prepareStatement("""
-                    SELECT id, pw_hint FROM password_pool
+                    SELECT id, pw_hint, blocked FROM password_pool
                     WHERE username=? AND pw_hash=?
                 """)) {
             ps.setString(1, username);
@@ -116,33 +119,28 @@ public class PamAuthHandler {
                 }
                 pwId = rs.getInt("id");
                 pwHint = rs.getString("pw_hint");
+                blocked = rs.getInt("blocked") == 1;
             }
         }
 
-        // 3) block_count 로직: 최근 block_count 번 안에 이 PW가 사용되었으면 KICK
-        if (blockCount > 0) {
-            try (PreparedStatement ps = conn.prepareStatement("""
-                        SELECT pw_hash
-                        FROM password_history
-                        WHERE username=?
-                        ORDER BY created_at DESC
-                        LIMIT ?
-                    """)) {
-                ps.setString(1, username);
-                ps.setInt(2, blockCount);
-                try (ResultSet rs = ps.executeQuery()) {
-                    while (rs.next()) {
-                        String recentHash = rs.getString("pw_hash");
-                        if (hash.equals(recentHash)) {
-                            return "KICK";
-                        }
-                    }
-                }
-            }
-        }
-
-        // 4) PASS: history에 추가 + hit_count 증가
         long now = System.currentTimeMillis();
+
+        // 3-1) block된 경우 last_use 업데이트 하고 FAIL
+        if (blocked) {
+            try (PreparedStatement ps = conn.prepareStatement("""
+                        UPDATE password_pool
+                        SET last_use = ?
+                        WHERE id=?
+                    """)) {
+                ps.setLong(1, now);
+                ps.setInt(2, pwId);
+                ps.executeUpdate();
+            }
+            refreshBlockedState(conn, username, blockCount);
+            return "FAIL";
+        }
+
+        // 3-2) PASS: history에 추가
         try (PreparedStatement ps = conn.prepareStatement("""
                     INSERT INTO password_history(username, pw_hash, pw_hint, created_at)
                     VALUES(?, ?, ?, ?)
@@ -154,12 +152,19 @@ public class PamAuthHandler {
             ps.executeUpdate();
         }
 
+        // hit_count/last_use 증가
         try (PreparedStatement ps = conn.prepareStatement("""
-                    UPDATE password_pool SET hit_count = hit_count + 1 WHERE id=?
+                    UPDATE password_pool
+                    SET hit_count = hit_count + 1,
+                        last_use = ?
+                    WHERE id=?
                 """)) {
-            ps.setInt(1, pwId);
+            ps.setLong(1, now);
+            ps.setInt(2, pwId);
             ps.executeUpdate();
         }
+
+        refreshBlockedState(conn, username, blockCount);
 
         return "PASS";
     }
@@ -174,6 +179,35 @@ public class PamAuthHandler {
                     ErrorType.PAM_AUTH,
                     "SHA-256 digest not available",
                     exception);
+        }
+    }
+
+    // last_use 기준으로 block 대상 패스워드계산
+    public static void refreshBlockedState(Connection conn, String username, int blockCount) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement("""
+                UPDATE password_pool SET blocked=0 WHERE username=?
+                """)) {
+            ps.setString(1, username);
+            ps.executeUpdate();
+        }
+
+        if (blockCount <= 0) {
+            return;
+        }
+
+        try (PreparedStatement ps = conn.prepareStatement("""
+                UPDATE password_pool
+                SET blocked=1
+                WHERE id IN (
+                    SELECT id FROM password_pool
+                    WHERE username=? AND last_use > 0
+                    ORDER BY last_use DESC
+                    LIMIT ?
+                )
+                """)) {
+            ps.setString(1, username);
+            ps.setInt(2, blockCount);
+            ps.executeUpdate();
         }
     }
 }
