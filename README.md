@@ -48,11 +48,11 @@ sudo ./gradlew run --args='manage'
 
 ## Debian Packaging
 
-Use the helper script to build a `.deb` that bundles the JAR, wrapper scripts, PAM helper, and systemd unit.
+Use the helper script to build a `.deb` that bundles the JAR, wrapper scripts, PAM helper, and systemd unit. Build artifacts are moved into `release/` under the project root.
 
 ```bash
 ./packaging/build-deb.sh
-sudo dpkg -i ../replayshield_*.deb
+sudo dpkg -i release/replayshield_*.deb
 ```
 
 During installation the post-install script will remind you to:
@@ -60,16 +60,18 @@ During installation the post-install script will remind you to:
 1. Run `sudo replayshield password && sudo systemctl start replayshield`.
 2. Update your PAM policy with the `pam_exec` line shown above.
 
+All packaging assets (Debian metadata, PAM helper, systemd unit, build script) live under the `packaging/` directory. The build script temporarily copies `packaging/debian` to the repository root when invoking `dpkg-buildpackage`, then moves the resulting `.deb`, `.buildinfo`, and `.changes` files into `release/`.
+
 ## Repository Structure
 
 | Path | Description |
 | --- | --- |
 | `src/main/java` | ReplayShield application code |
-| `systemd/replayshield.service` | systemd unit for the HTTP server |
+| `packaging/systemd/replayshield.service` | systemd unit for the HTTP server |
 | `packaging/replayshield-pam.sh` | PAM helper script executed by `pam_exec.so` |
 | `packaging/replayshield.sh` | `/usr/bin/replayshield` wrapper |
 | `packaging/build-deb.sh` | Convenience script to build the Debian package |
-| `debian/` | Debian packaging metadata |
+| `packaging/debian` | Debian packaging metadata |
 
 ## License
 

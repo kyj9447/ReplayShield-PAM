@@ -1,0 +1,12 @@
+[Unit]
+Description=ReplayShield PAM HTTP Auth Server
+After=network.target
+
+[Service]
+User=root
+Group=root
+WorkingDirectory=/var/lib/replayshield
+ExecStartPre=/usr/bin/test -f /dev/shm/replayshield/admin.key
+ExecStart=/usr/bin/replayshield serve
+Restart=on-failure
+RestartSec=2s

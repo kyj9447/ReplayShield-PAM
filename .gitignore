@@ -9,4 +9,4 @@ gradlew.bat
 .vscode/
 gradle/
 .gradle-home/
-systemd/replayshield.service
+release/

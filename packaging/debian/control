@@ -1,0 +1,14 @@
+Source: replayshield
+Section: admin
+Priority: optional
+Maintainer: YoungJin Ko <kyj9447@gmail.com>
+Build-Depends: debhelper-compat (= 13), openjdk-21-jdk, gradle, bash, curl
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+
+Package: replayshield
+Architecture: all
+Depends: ${misc:Depends}, default-jre-headless | java21-runtime-headless, curl
+Description: ReplayShield PAM HTTP auth server
+ Ultra-lightweight external PAM authentication server that blocks
+ replayed SSH passwords via password pool rotation and blocking rules.

@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        systemctl enable replayshield.service >/dev/null 2>&1 || true
+        cat <<'EOF'
+[ReplayShield setup]
+1) Cache the admin password in RAM, then start the service:
+   sudo replayshield password && sudo systemctl start replayshield
+
+2) Add the following line to your PAM policy (e.g. /etc/pam.d/sshd) to enable ReplayShield:
+   auth required pam_exec.so expose_authtok /usr/lib/replayshield/replayshield-pam.sh
+   (Remove the default Unix password auth, e.g. comment out '@include common-auth')
+EOF
+        ;;
+esac
+
+exit 0
