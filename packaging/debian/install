@@ -1,3 +1,4 @@
 build/libs/replayshield.jar usr/lib/replayshield/
 packaging/replayshield-pam.sh usr/lib/replayshield/
 packaging/systemd/replayshield.service lib/systemd/system/
+packaging/bash-completion/replayshield usr/share/bash-completion/completions/

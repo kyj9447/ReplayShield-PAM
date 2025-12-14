@@ -8,5 +8,4 @@ Group=root
 WorkingDirectory=/var/lib/replayshield
 ExecStartPre=/usr/bin/test -f /dev/shm/replayshield/admin.key
 ExecStart=/usr/bin/replayshield serve
-Restart=on-failure
-RestartSec=2s
+Restart=no

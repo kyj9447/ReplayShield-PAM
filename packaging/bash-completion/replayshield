@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+_replayshield_complete() {
+    local cur prev
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    if [[ $COMP_CWORD -eq 1 ]]; then
+        COMPREPLY=( $(compgen -W "init manage password serve help --help" -- "$cur") )
+    fi
+    return 0
+}
+
+complete -F _replayshield_complete replayshield
