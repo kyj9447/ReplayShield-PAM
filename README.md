@@ -84,4 +84,10 @@ sudo dpkg -i replayshield_*.deb
 
 ## License
 
-MIT License (see `LICENSE`).
+Apache License 2.0 (`LICENSE`).  
+You may use, modify, and redistribute the project in source or binary form as long as:
+- a copy of the Apache 2.0 license (and any NOTICE text) accompanies your distribution,
+- modified files include a notice describing the changes, and
+- attribution/copyright notices are preserved.
+
+The software is provided “as is,” without warranties or conditions of any kind.
