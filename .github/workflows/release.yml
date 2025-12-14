@@ -18,6 +18,9 @@ jobs:
       - name: Checkout sources
         uses: actions/checkout@v4
 
+      - name: Ensure Gradle wrapper is executable
+        run: chmod +x gradlew
+
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
@@ -34,6 +37,7 @@ jobs:
 
       - name: Build shaded JAR and Debian package
         run: bash packaging/build-deb.sh
+        working-directory: ${{ github.workspace }}
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

@@ -11,7 +11,16 @@ rm -rf "$RELEASE_DIR"
 rm -f ../replayshield_* ../*.buildinfo ../*.changes 2>/dev/null || true
 
 echo "[1/3] Building shaded JAR via Gradle..."
-./gradlew --no-daemon clean shadowJar
+GRADLEW="$PROJECT_ROOT/gradlew"
+if [ -x "$GRADLEW" ]; then
+    "$GRADLEW" --no-daemon clean shadowJar
+else
+    echo "gradlew not found, skipping Gradle build. Expecting pre-built JAR at build/libs/replayshield.jar"
+    if [ ! -f "$PROJECT_ROOT/build/libs/replayshield.jar" ]; then
+        echo "Error: build/libs/replayshield.jar missing and Gradle wrapper not available." >&2
+        exit 1
+    fi
+fi
 
 # prepare temporary debian directory
 TEMP_DEBIAN="$PROJECT_ROOT/debian"
