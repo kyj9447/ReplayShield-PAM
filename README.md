@@ -1,86 +1,87 @@
 # ReplayShield-PAM
 
-ReplayShield is a lightweight HTTP authentication service that augments PAM (for example SSH) by rejecting passwords that were recently used. It stores a per-user password pool, keeps usage history, and blocks any password that falls inside a configurable window.
+ReplayShield is a lightweight HTTP authentication service that rejects recently used passwords during PAM (for example SSH) logins to mitigate password-reuse attacks. It keeps a per-user password pool and history, blocking any credential that falls within the configured `block_count` window.
 
 [한국어 README](README_KR.md)
 
-## Features
+## Key Features
 
-- CLI workflow (`replayshield init/manage/password/serve`) for bootstrapping, managing password pools, caching the admin key, and running the HTTP auth server.
-- Per-user password history with hints, hit counters, block state, and automatic enforcement of a `block_count` window.
-- Encrypted SQLite database: data stays encrypted on disk and only exists in clear form inside `/dev/shm`.
-- HTTP POST `/auth` endpoint returning `PASS`/`FAIL` for PAM helpers.
-- PAM integration script (`/usr/lib/replayshield/replayshield-pam.sh`) compatible with `pam_exec.so expose_authtok` and additional factors such as Google Authenticator.
-- Systemd service unit, Debian packaging scripts, and wrapper binaries for `/usr/bin/replayshield`.
+- CLI workflow via `replayshield init/manage/password/serve`:
+  - **init** – Initialization  
+    Prompts for an admin password and creates an encrypted database with that key. Re-running overwrites the existing DB (re-initialization).
+  - **manage** – Manage users/password pools  
+    - *Add new user*: create a user and register initial passwords.  
+    - *Manage user*: add/delete passwords, adjust block counts per user.  
+    - *Delete user*: remove a user entirely.  
+    - *Change admin password*: rotate the admin key.  
+    - *DB dump*: print the current database (users/password history) to the console.
+  - **password** – Cache the admin key  
+    Stores the admin credential in tmpfs so `replayshield serve` can start in a headless environment.
+  - **serve** – Run the authentication server  
+    Uses the cached admin key to launch the HTTP server.
 
-## Installation
+- Encrypted SQLite DB: data is always encrypted on disk and decrypted only inside `/dev/shm`.
+- `/auth` HTTP POST endpoint returns `PASS`/`FAIL`, and the PAM helper consumes this result to decide login flow.
+- PAM helper script (`/usr/lib/replayshield/replayshield-pam.sh`) integrates with `pam_exec.so expose_authtok`.
 
-### Build from source
+## 1. Installation
 
-Requirements: JDK 21 and the Gradle wrapper in this repo.
+Prerequisite: JDK 21.
+
+If you already have a `.deb` package (from GitHub Releases or `packaging/build-deb.sh`):
 
 ```bash
-./gradlew clean shadowJar
+sudo dpkg -i replayshield_*.deb
 ```
 
-The runnable JAR will be available under `build/libs/replayshield.jar`.
+## 2. Configuration
 
-### Debian package
+1. **PAM configuration**  
+   Add ReplayShield to `/etc/pam.d/sshd` (or your target PAM policy):
+   ```
+   auth required pam_exec.so quiet expose_authtok /usr/lib/replayshield/replayshield-pam.sh
+   ```
+   If you have deliberately replaced the default Unix password auth, comment out the relevant `@include common-...` lines:
+   ```
+   # @include common-auth
+   # @include common-account
+   # @include common-session
+   ```
+   Add other modules (e.g., Google Authenticator) before/after the ReplayShield line as needed.
 
-Use the helper to create a `.deb` that contains the JAR, PAM helper, wrapper, and systemd unit.
+2. **Filesystem check**  
+   Ensure `/dev/shm` is mounted as tmpfs:
+   ```bash
+   mount | grep /dev/shm
+   ```
+   You should see something like:
+   ```
+   tmpfs on /dev/shm type tmpfs (rw,nosuid,nodev,inode64)
+   ```
 
-```bash
-./packaging/build-deb.sh
-sudo dpkg -i release/replayshield_*.deb
-```
+## 3. Running
 
-After installation `replayshield` is available in `/usr/bin`, the PAM script is placed under `/usr/lib/replayshield`, and a `replayshield.service` unit is installed but inactive until configured.
-The package also installs a bash-completion script under `/usr/share/bash-completion/completions/replayshield`, so typing `replayshield <TAB>` suggests `init`, `manage`, `password`, and `serve`.
+1. **Initialization & management**
+   ```bash
+   sudo replayshield init      # creates salt and encrypted DB; running again resets everything
+   sudo replayshield manage    # manage users/password pools, adjust block_count, run DB dumps, etc.
+   ```
 
-## Configuration
-
-1. **PAM policy**
-   - Edit `/etc/pam.d/sshd` (or any other target PAM stack) and insert the ReplayShield hook:
-     ```
-     auth required pam_exec.so quiet expose_authtok /usr/lib/replayshield/replayshield-pam.sh
-     ```
-   - Keep or re-enable any necessary `@include common-auth`, `common-account`, and `common-session` lines so standard system checks still run alongside ReplayShield.
-   - Optional: place other modules (e.g. Google Authenticator) before/after the ReplayShield line. A common pattern is:
-     ```
-     auth [success=1 default=ignore] pam_succeed_if.so user = guest1
-     auth required pam_google_authenticator.so
-     ```
-2. **Systemd**
-   - Adjust `/etc/default/replayshield` or the unit override if you need to change the listening address/port (default `127.0.0.1:4444`) or environment variables like `REPLAYSHIELD_URL` for the PAM script.
-3. **Filesystem prerequisites**
-   - Ensure `/dev/shm` is mounted as tmpfs (required for decrypted database files).
-   - Confirm `/etc/replayshield` and `/var/lib/replayshield` exist with root-only permissions; the installer creates them but you can verify with `sudo ls -ld`.
-
-## Running
-
-1. **Initialize or manage data**
-   - `sudo replayshield init` creates the salt file and encrypted database. Re-run only if you intend to wipe all stored data.
-   - `sudo replayshield manage` launches the interactive CLI for creating users, managing password pools, adjusting `block_count`, and dumping debug tables (which now use the new ASCII table renderer).
 2. **Cache the admin password**
-   - The HTTP server requires the admin key to be present in `/dev/shm/replayshield/admin.key`.
-   - Run `sudo replayshield password` (or `sudo ./gradlew run --args='password'` during development) and follow the prompt. This stores the key in RAM until reboot.
+   ```bash
+   sudo replayshield password
+   ```
+   This stores the admin key in `/dev/shm/replayshield/admin.key`.
+
 3. **Start the service**
-   - For ad-hoc testing: `sudo replayshield serve` or `sudo ./gradlew run --args='serve'`.
-   - For systemd: `sudo systemctl enable --now replayshield`. Ensure step 2 has been completed before the service starts.
-4. **Verify PAM flow**
-   - Attempt an SSH login. ReplayShield’s PAM helper posts the username/password to `http://127.0.0.1:4444/auth` and expects `PASS`. `FAIL` or errors cause the PAM transaction to abort.
+   ```bash
+   sudo systemctl start replayshield
+   ```
+   The daemon deletes the cached key once it starts successfully, so if you restart the service you must run `replayshield password` again before `systemctl restart`.
 
-## Repository Structure
-
-| Path | Description |
-| --- | --- |
-| `src/main/java` | ReplayShield application code |
-| `packaging/systemd/replayshield.service` | systemd unit used by the `.deb` |
-| `packaging/replayshield-pam.sh` | PAM helper executed by `pam_exec.so` |
-| `packaging/replayshield.sh` | `/usr/bin/replayshield` wrapper script |
-| `packaging/build-deb.sh` | Convenience script that runs `dpkg-buildpackage` |
-| `packaging/debian` | Debian metadata (control, rules, postinst/postrm, etc.) |
+4. **Verify PAM flow**  
+   Try an SSH login. The PAM script posts the username/password to `http://127.0.0.1:4444/auth` and only continues if it receives `PASS`.
 
 ## License
 
-MIT License. See `LICENSE` for details.
+MIT License (see `LICENSE`).
