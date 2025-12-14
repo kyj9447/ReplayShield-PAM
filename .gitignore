@@ -9,4 +9,5 @@ gradlew.bat
 .vscode/
 gradle/
 .gradle-home/
+.gradle-local/
 release/
