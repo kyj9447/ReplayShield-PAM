@@ -29,6 +29,7 @@ import dev.replayshield.security.KeyLoader;
 import dev.replayshield.server.HttpAuthServer;
 import dev.replayshield.server.PamAuthHandler;
 import dev.replayshield.util.AsciiTable;
+import dev.replayshield.util.ErrorReporter;
 import dev.replayshield.util.PathResolver;
 import dev.replayshield.util.ReplayShieldException;
 import dev.replayshield.util.ReplayShieldException.ErrorType;
