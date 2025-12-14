@@ -2,6 +2,8 @@
 
 ReplayShield is a lightweight HTTP authentication service that augments PAM (for example SSH) by rejecting passwords that were recently used. It stores a per-user password pool, keeps usage history, and blocks any password that falls inside a configurable window.
 
+[한국어 README](README_KR.md)
+
 ## Features
 
 - CLI workflow (`replayshield init/manage/password/serve`) for bootstrapping, managing password pools, caching the admin key, and running the HTTP auth server.

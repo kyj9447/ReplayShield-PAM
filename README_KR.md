@@ -2,6 +2,8 @@
 
 ReplayShield는 PAM(예: SSH) 인증 과정에서 최근에 사용된 암호를 거부하여 재사용 공격을 막아 주는 경량 HTTP 인증 서비스입니다. 사용자별 암호 풀과 사용 이력을 저장하고, 설정된 윈도우(`block_count`) 안에서 재사용된 암호를 자동으로 차단합니다.
 
+[English README](README.md)
+
 ## 주요 기능
 
 - `replayshield init/manage/password/serve` CLI로 초기화, 사용자/암호 풀 관리, 관리자 키 캐싱, HTTP 서버 실행을 한 번에 수행.
