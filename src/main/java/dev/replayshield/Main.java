@@ -28,7 +28,7 @@ import dev.replayshield.security.AdminKeyHolder;
 import dev.replayshield.security.KeyLoader;
 import dev.replayshield.server.HttpAuthServer;
 import dev.replayshield.server.PamAuthHandler;
-import dev.replayshield.util.ErrorReporter;
+import dev.replayshield.util.AsciiTable;
 import dev.replayshield.util.PathResolver;
 import dev.replayshield.util.ReplayShieldException;
 import dev.replayshield.util.ReplayShieldException.ErrorType;
@@ -535,23 +535,27 @@ public class Main {
                     """)) {
                 ps.setString(1, username);
                 try (ResultSet rs = ps.executeQuery()) {
-                    System.out.println();
-                    System.out.println("+------+------------+-------+----------+---------------------+");
-                    System.out.println("| ID   | HINT       | HIT   | BLOCKED  | LAST USE            |");
-                    System.out.println("+------+------------+-------+----------+---------------------+");
+                    AsciiTable table = AsciiTable.columnBuilder()
+                            .addColumn("ID", 4, AsciiTable.Align.RIGHT)
+                            .addColumn("HINT", 10, AsciiTable.Align.LEFT)
+                            .addColumn("HIT", 5, AsciiTable.Align.RIGHT)
+                            .addColumn("BLOCKED", 7, AsciiTable.Align.CENTER)
+                            .addColumn("LAST USE", 17, AsciiTable.Align.LEFT)
+                            .build();
                     while (rs.next()) {
                         long lastUseValue = rs.getLong("last_use");
                         String lastUse = lastUseValue > 0
                                 ? sdf.format(new Date(lastUseValue))
-                                : "-  ";
-                        System.out.printf("| %-4d | %-10s | %-5d | %-8s | %-17s |%n",
-                                rs.getInt("id"),
+                                : "-";
+                        table.addRow(
+                                String.valueOf(rs.getInt("id")),
                                 rs.getString("pw_hint"),
-                                rs.getInt("hit_count"),
+                                String.valueOf(rs.getInt("hit_count")),
                                 rs.getInt("blocked") == 1 ? "YES" : "NO",
                                 lastUse);
                     }
-                    System.out.println("+------+------------+-------+----------+---------------------+");
+                    System.out.println();
+                    System.out.println(table.render());
                     System.out.println();
                 }
             }
@@ -794,14 +798,16 @@ public class Main {
                 System.out.println("--------------------------------------------------");
                 try (ResultSet rs = st.executeQuery(
                         "SELECT username, block_count FROM user_config ORDER BY username")) {
-                    System.out.println("+----------------------+--------------+");
-                    System.out.println("|         USER         |  block_count |");
-                    System.out.println("+----------------------+--------------+");
+                    AsciiTable table = AsciiTable.columnBuilder()
+                            .addColumn("USER", 20, AsciiTable.Align.LEFT)
+                            .addColumn("block_count", 12, AsciiTable.Align.RIGHT)
+                            .build();
                     while (rs.next()) {
-                        System.out.printf("| %-20s | %-12d |%n",
-                                rs.getString(1), rs.getInt(2));
+                        table.addRow(
+                                rs.getString(1),
+                                String.valueOf(rs.getInt(2)));
                     }
-                    System.out.println("+----------------------+--------------+");
+                    System.out.println(table.render());
                 }
                 System.out.println();
                 System.out.println("--------------------------------------------------");
@@ -812,27 +818,28 @@ public class Main {
                         FROM password_pool
                         ORDER BY username, id
                         """)) {
-                    System.out.println(
-                            "+------+-----------------+----------------------------------------------+------------+-------+---------+---------------------+");
-                    System.out.println(
-                            "|  ID  |       USER      |                    PW HASH                   |    HINT    |  HIT  | BLOCKED | LAST USE            |");
-                    System.out.println(
-                            "+------+-----------------+----------------------------------------------+------------+-------+---------+---------------------+");
+                    AsciiTable table = AsciiTable.columnBuilder()
+                            .addColumn("ID", 4, AsciiTable.Align.RIGHT)
+                            .addColumn("USER", 15, AsciiTable.Align.LEFT)
+                            .addColumn("PW HASH", 44, AsciiTable.Align.LEFT)
+                            .addColumn("HINT", 10, AsciiTable.Align.LEFT)
+                            .addColumn("HIT", 5, AsciiTable.Align.RIGHT)
+                            .addColumn("BLOCKED", 7, AsciiTable.Align.CENTER)
+                            .addColumn("LAST USE", 17, AsciiTable.Align.LEFT)
+                            .build();
                     while (rs.next()) {
                         long lastUseValue = rs.getLong("last_use");
                         String lastUse = lastUseValue > 0 ? sdf.format(new Date(lastUseValue)) : "-";
-                        System.out.printf(
-                                "| %-4d | %-15s | %-44s | %-10s | %-5d | %-7s | %-17s |%n",
-                                rs.getInt("id"),
+                        table.addRow(
+                                String.valueOf(rs.getInt("id")),
                                 rs.getString("username"),
                                 rs.getString("pw_hash"),
                                 rs.getString("pw_hint"),
-                                rs.getInt("hit_count"),
+                                String.valueOf(rs.getInt("hit_count")),
                                 rs.getInt("blocked") == 1 ? "YES" : "NO",
                                 lastUse);
                     }
-                    System.out.println(
-                            "+------+-----------------+----------------------------------------------+------------+-------+---------+---------------------+");
+                    System.out.println(table.render());
                 }
                 System.out.println();
                 System.out.println("--------------------------------------------------");
@@ -843,26 +850,24 @@ public class Main {
                         FROM password_history
                         ORDER BY id
                         """)) {
-                    System.out.println(
-                            "+------+-----------------+----------------------------------------------+------------+---------------------+");
-                    System.out.println(
-                            "|  ID  |       USER      |                    PW HASH                   |    HINT    |         TIME        |");
-                    System.out.println(
-                            "+------+-----------------+----------------------------------------------+------------+---------------------+");
+                    AsciiTable table = AsciiTable.columnBuilder()
+                            .addColumn("ID", 4, AsciiTable.Align.RIGHT)
+                            .addColumn("USER", 15, AsciiTable.Align.LEFT)
+                            .addColumn("PW HASH", 44, AsciiTable.Align.LEFT)
+                            .addColumn("HINT", 10, AsciiTable.Align.LEFT)
+                            .addColumn("TIME", 19, AsciiTable.Align.LEFT)
+                            .build();
                     while (rs.next()) {
                         long ts = rs.getLong("created_at");
-                        String time = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-                                .format(new Date(ts));
-                        System.out.printf(
-                                "| %-4d | %-15s | %-44s | %-10s | %-19s |%n",
-                                rs.getInt("id"),
+                        String time = sdf.format(new Date(ts));
+                        table.addRow(
+                                String.valueOf(rs.getInt("id")),
                                 rs.getString("username"),
                                 rs.getString("pw_hash"),
                                 rs.getString("pw_hint"),
                                 time);
                     }
-                    System.out.println(
-                            "+------+-----------------+----------------------------------------------+----------------------+---------------------+");
+                    System.out.println(table.render());
                 }
                 System.out.println("\n=== END OF DEBUG DUMP ===");
             }
