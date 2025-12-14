@@ -126,7 +126,7 @@ public class Main {
                 | SQLException exception) {
             ErrorReporter.logError("main", exception);
         } finally {
-            System.out.println("FINALLY3");
+            // System.out.println("FINALLY Check");
             if (server != null) {
                 server.stop(1); // 필요에 따라 delay 지정
             }
@@ -543,7 +543,7 @@ public class Main {
                         long lastUseValue = rs.getLong("last_use");
                         String lastUse = lastUseValue > 0
                                 ? sdf.format(new Date(lastUseValue))
-                                : "-";
+                                : "-  ";
                         System.out.printf("| %-4d | %-10s | %-5d | %-8s | %-17s |%n",
                                 rs.getInt("id"),
                                 rs.getString("pw_hint"),
@@ -813,16 +813,16 @@ public class Main {
                         ORDER BY username, id
                         """)) {
                     System.out.println(
-                            "+------+-----------------+----------------------------------------------+----------------------+-------+---------+---------------------+");
+                            "+------+-----------------+----------------------------------------------+------------+-------+---------+---------------------+");
                     System.out.println(
-                            "|  ID  |       USER      |                    PW HASH                   |         HINT         |  HIT  | BLOCKED | LAST USE            |");
+                            "|  ID  |       USER      |                    PW HASH                   |    HINT    |  HIT  | BLOCKED | LAST USE            |");
                     System.out.println(
-                            "+------+-----------------+----------------------------------------------+----------------------+-------+---------+---------------------+");
+                            "+------+-----------------+----------------------------------------------+------------+-------+---------+---------------------+");
                     while (rs.next()) {
                         long lastUseValue = rs.getLong("last_use");
                         String lastUse = lastUseValue > 0 ? sdf.format(new Date(lastUseValue)) : "-";
                         System.out.printf(
-                                "| %-4d | %-15s | %-44s | %-20s | %-5d | %-7s | %-17s |%n",
+                                "| %-4d | %-15s | %-44s | %-10s | %-5d | %-7s | %-17s |%n",
                                 rs.getInt("id"),
                                 rs.getString("username"),
                                 rs.getString("pw_hash"),
@@ -832,7 +832,7 @@ public class Main {
                                 lastUse);
                     }
                     System.out.println(
-                            "+------+-----------------+----------------------------------------------+----------------------+-------+---------+---------------------+");
+                            "+------+-----------------+----------------------------------------------+------------+-------+---------+---------------------+");
                 }
                 System.out.println();
                 System.out.println("--------------------------------------------------");
@@ -844,17 +844,17 @@ public class Main {
                         ORDER BY id
                         """)) {
                     System.out.println(
-                            "+------+-----------------+----------------------------------------------+----------------------+---------------------+");
+                            "+------+-----------------+----------------------------------------------+------------+---------------------+");
                     System.out.println(
-                            "|  ID  |       USER      |                    PW HASH                   |          HINT        |         TIME        |");
+                            "|  ID  |       USER      |                    PW HASH                   |    HINT    |         TIME        |");
                     System.out.println(
-                            "+------+-----------------+----------------------------------------------+----------------------+---------------------+");
+                            "+------+-----------------+----------------------------------------------+------------+---------------------+");
                     while (rs.next()) {
                         long ts = rs.getLong("created_at");
                         String time = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
                                 .format(new Date(ts));
                         System.out.printf(
-                                "| %-4d | %-15s | %-44s | %-20s | %-19s |%n",
+                                "| %-4d | %-15s | %-44s | %-10s | %-19s |%n",
                                 rs.getInt("id"),
                                 rs.getString("username"),
                                 rs.getString("pw_hash"),
