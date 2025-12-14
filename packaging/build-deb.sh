@@ -36,10 +36,10 @@ dpkg-buildpackage -us -uc "$@"
 
 mkdir -p "$RELEASE_DIR"
 shopt -s nullglob
-artifacts=(../replayshield_* ../*.buildinfo ../*.changes)
-if [ ${#artifacts[@]} -gt 0 ]; then
-    mv "${artifacts[@]}" "$RELEASE_DIR"/
-fi
+for artifact in ../replayshield_* ../*.buildinfo ../*.changes; do
+    [ -e "$artifact" ] || continue
+    mv "$artifact" "$RELEASE_DIR"/
+done
 shopt -u nullglob
 
 echo "Done. Packages placed in $RELEASE_DIR:"
