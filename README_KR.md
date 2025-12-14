@@ -54,8 +54,9 @@ sudo dpkg -i replayshield_*.deb
       mount | grep /dev/shm
       ```
       예시 출력 :
-
-      tmpfs on /dev/shm **type tmpfs** (rw,nosuid,nodev,inode64)
+      ```
+      tmpfs on /dev/shm type tmpfs (rw,nosuid,nodev,inode64)
+      ```
 
 ## 3. 실행
 
