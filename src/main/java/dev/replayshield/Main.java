@@ -22,9 +22,11 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import dev.replayshield.db.Db;
 import dev.replayshield.db.SecureDbSession;
 import dev.replayshield.db.SecureDbSession.DbSession;
 import dev.replayshield.security.AdminKeyHolder;
+import dev.replayshield.security.EncryptDecrypt;
 import dev.replayshield.security.KeyLoader;
 import dev.replayshield.server.HttpAuthServer;
 import dev.replayshield.server.PamAuthHandler;
@@ -39,6 +41,9 @@ public class Main {
     // 콘솔 선언
     public static final Console CONSOLE = System.console();
     private static final int MIN_PASSWORD_POOL_SIZE = 3;
+    private static final int DEFAULT_BENCH_WARMUP = 5;
+    private static final int DEFAULT_BENCH_ITERATIONS = 50;
+    private static final int TEST_BENCH_PASSWORD_POOL_SIZE = 100;
 
     public static void main(String[] args) {
         Thread.setDefaultUncaughtExceptionHandler(
@@ -113,6 +118,14 @@ public class Main {
                     }
                     cacheAdminPassword();
                 }
+                case "benchmark" -> {
+                    if (CONSOLE == null) {
+                        throw new ReplayShieldException(
+                                ReplayShieldException.ErrorType.CONFIGURATION,
+                                "Interactive console required (TTY not detected)");
+                    }
+                    runBenchmarkMode(args);
+                }
                 default -> {
                     System.err.println("Unknown command. Use --help.");
                 }
@@ -141,6 +154,7 @@ public class Main {
             manage : administrator CLI
             serve : Start HTTP auth server
             password : Cache admin password in RAM for headless serve
+            benchmark : measure auth flow (actual DB or test DB)
             """;
 
     // ================================
@@ -204,6 +218,376 @@ public class Main {
         System.out.println("ReplayShield server running on port " + port);
         System.out.println("Use Ctrl+C to stop.");
         return server; // main()에 서버 종료용으로 인스턴스 반환
+    }
+
+    private enum BenchmarkMode {
+        ACTUAL_DB,
+        TEST_DB
+    }
+
+    private record BenchmarkOptions(BenchmarkMode mode, int warmup, int iterations) {
+    }
+
+    private record BenchmarkContext(PamAuthHandler handler, String username, String password, Path tempEncFile) {
+    }
+
+    private record BenchmarkIteration(
+            long totalNanos,
+            long decryptNanos,
+            long authLogicNanos,
+            long encryptNanos,
+            String result) {
+    }
+
+    private record BenchmarkSummary(
+            long minNanos,
+            long p50Nanos,
+            long p95Nanos,
+            long p99Nanos,
+            long maxNanos,
+            long totalNanos,
+            double avgNanos,
+            double throughputOpsPerSec) {
+    }
+
+    private static void runBenchmarkMode(String[] args) throws IOException, SQLException, NoSuchAlgorithmException {
+        if (containsArg(args, "--help") || containsArg(args, "-h")) {
+            System.out.println("""
+                    Usage: replayshield benchmark [options]
+                      --mode=actual|test     Benchmark mode (default: test)
+                      --warmup=<N>           Warmup iterations (default: 5)
+                      --iterations=<N>       Measured iterations (default: 50)
+                    """);
+            return;
+        }
+
+        BenchmarkOptions options = parseBenchmarkOptions(args);
+        consoleClear("[ Benchmark ]");
+        System.out.println("mode       : " + toBenchmarkModeLabel(options.mode()));
+        System.out.println("warmup     : " + options.warmup());
+        System.out.println("iterations : " + options.iterations());
+        System.out.println();
+
+        byte[] key = KeyLoader.verifyAdminPassword();
+        BenchmarkContext context = null;
+        try {
+            context = prepareBenchmarkContext(options.mode(), key);
+            System.out.println("target user: " + context.username());
+            if (options.mode() == BenchmarkMode.TEST_DB) {
+                System.out.println("test db    : " + context.tempEncFile());
+            }
+            System.out.println();
+
+            for (int i = 0; i < options.warmup(); i++) {
+                runAuthBenchmarkIteration(context);
+            }
+
+            long[] totalSamples = new long[options.iterations()];
+            long[] decryptSamples = new long[options.iterations()];
+            long[] authLogicSamples = new long[options.iterations()];
+            long[] encryptSamples = new long[options.iterations()];
+            int passCount = 0;
+            int failCount = 0;
+            int otherCount = 0;
+
+            for (int i = 0; i < options.iterations(); i++) {
+                BenchmarkIteration iter = runAuthBenchmarkIteration(context);
+                totalSamples[i] = iter.totalNanos();
+                decryptSamples[i] = iter.decryptNanos();
+                authLogicSamples[i] = iter.authLogicNanos();
+                encryptSamples[i] = iter.encryptNanos();
+
+                if ("PASS".equals(iter.result())) {
+                    passCount++;
+                } else if ("FAIL".equals(iter.result())) {
+                    failCount++;
+                } else {
+                    otherCount++;
+                }
+            }
+
+            BenchmarkSummary totalSummary = summarizeBenchmark(totalSamples);
+            BenchmarkSummary decryptSummary = summarizeBenchmark(decryptSamples);
+            BenchmarkSummary authSummary = summarizeBenchmark(authLogicSamples);
+            BenchmarkSummary encryptSummary = summarizeBenchmark(encryptSamples);
+
+            System.out.println("Benchmark complete.");
+            System.out.printf("result     : PASS=%d FAIL=%d OTHER=%d%n", passCount, failCount, otherCount);
+            System.out.println();
+            printBenchmarkSummary("end-to-end", totalSummary);
+            printBenchmarkSummary("decrypt", decryptSummary);
+            printBenchmarkSummary("auth-logic", authSummary);
+            printBenchmarkSummary("encrypt", encryptSummary);
+            if (options.mode() == BenchmarkMode.ACTUAL_DB) {
+                System.out.println("note       : actual mode updates real DB state (history/hit_count/last_use).");
+            }
+        } finally {
+            if (context != null && context.tempEncFile() != null) {
+                deleteQuietly(context.tempEncFile());
+            }
+            Arrays.fill(key, (byte) 0);
+        }
+    }
+
+    private static BenchmarkOptions parseBenchmarkOptions(String[] args) {
+        BenchmarkMode mode = BenchmarkMode.TEST_DB;
+        int warmup = DEFAULT_BENCH_WARMUP;
+        int iterations = DEFAULT_BENCH_ITERATIONS;
+
+        for (int i = 1; i < args.length; i++) {
+            String arg = args[i];
+            if (arg.startsWith("--mode=")) {
+                mode = parseBenchmarkMode(arg.substring("--mode=".length()));
+                continue;
+            }
+            if (arg.startsWith("--warmup=")) {
+                warmup = parseNonNegativeIntOption("warmup", arg.substring("--warmup=".length()));
+                continue;
+            }
+            if (arg.startsWith("--iterations=")) {
+                iterations = parsePositiveIntOption("iterations", arg.substring("--iterations=".length()));
+                continue;
+            }
+            throw new ReplayShieldException(
+                    ErrorType.CONFIGURATION,
+                    "Unknown benchmark option: " + arg + " (use 'replayshield benchmark --help').");
+        }
+
+        return new BenchmarkOptions(mode, warmup, iterations);
+    }
+
+    private static BenchmarkMode parseBenchmarkMode(String value) {
+        String normalized = value.trim().toLowerCase();
+        return switch (normalized) {
+            case "actual", "actual-db" -> BenchmarkMode.ACTUAL_DB;
+            case "test", "test-db", "mock" -> BenchmarkMode.TEST_DB;
+            default -> throw new ReplayShieldException(
+                    ErrorType.CONFIGURATION,
+                    "Invalid benchmark mode: " + value + " (expected actual|test)");
+        };
+    }
+
+    private static int parseNonNegativeIntOption(String name, String raw) {
+        int parsed;
+        try {
+            parsed = Integer.parseInt(raw.trim());
+        } catch (NumberFormatException exception) {
+            throw new ReplayShieldException(
+                    ErrorType.CONFIGURATION,
+                    "Invalid integer for --" + name + ": " + raw,
+                    exception);
+        }
+        if (parsed < 0) {
+            throw new ReplayShieldException(
+                    ErrorType.CONFIGURATION,
+                    "--" + name + " must be >= 0");
+        }
+        return parsed;
+    }
+
+    private static int parsePositiveIntOption(String name, String raw) {
+        int parsed = parseNonNegativeIntOption(name, raw);
+        if (parsed == 0) {
+            throw new ReplayShieldException(
+                    ErrorType.CONFIGURATION,
+                    "--" + name + " must be >= 1");
+        }
+        return parsed;
+    }
+
+    private static String toBenchmarkModeLabel(BenchmarkMode mode) {
+        return switch (mode) {
+            case ACTUAL_DB -> "actual-db";
+            case TEST_DB -> "test-db";
+        };
+    }
+
+    private static BenchmarkContext prepareBenchmarkContext(BenchmarkMode mode, byte[] key)
+            throws IOException, SQLException, NoSuchAlgorithmException {
+        switch (mode) {
+            case ACTUAL_DB -> {
+                Path encFile = PathResolver.getEncryptedDbFile().toPath();
+                if (!Files.exists(encFile)) {
+                    throw new ReplayShieldException(ErrorType.INITIALIZATION, "Encrypted DB not found. Run init first.");
+                }
+                System.out.print("Benchmark username: ");
+                String username = CONSOLE.readLine().trim();
+                if (username.isEmpty()) {
+                    throw new ReplayShieldException(ErrorType.CONFIGURATION, "Benchmark username is required.");
+                }
+                System.out.print("Benchmark password: ");
+                char[] passwordChars = CONSOLE.readPassword();
+                if (passwordChars == null || passwordChars.length == 0) {
+                    throw new ReplayShieldException(ErrorType.CONFIGURATION, "Benchmark password is required.");
+                }
+                String password = new String(passwordChars);
+                Arrays.fill(passwordChars, '\0');
+                PamAuthHandler handler = new PamAuthHandler(key);
+                return new BenchmarkContext(handler, username, password, null);
+            }
+            case TEST_DB -> {
+                Path memoryDir = PathResolver.getMemoryDbDir().toPath();
+                if (!Files.exists(memoryDir)) {
+                    Files.createDirectories(memoryDir);
+                }
+                Path testEncFile = Files.createTempFile(memoryDir, "replayshield-bench-", ".enc");
+                String username = "bench_user";
+                String password = "bench_password";
+                setupMockEncryptedDb(key, testEncFile, username, password);
+                PamAuthHandler handler = new PamAuthHandler(key, testEncFile);
+                return new BenchmarkContext(handler, username, password, testEncFile);
+            }
+        }
+        throw new ReplayShieldException(ErrorType.CONFIGURATION, "Unsupported benchmark mode: " + mode);
+    }
+
+    private static void setupMockEncryptedDb(byte[] key, Path targetEncFile, String username, String password)
+            throws SQLException, NoSuchAlgorithmException {
+        Path plainDb = PathResolver.createMemoryDbTempFile();
+        char[] passwordChars = password.toCharArray();
+        try {
+            try (Connection conn = Db.open(plainDb)) {
+                try (PreparedStatement ps = conn.prepareStatement("""
+                        INSERT INTO user_config(username, block_count)
+                        VALUES(?, ?)
+                        """)) {
+                    ps.setString(1, username);
+                    ps.setInt(2, 0);
+                    ps.executeUpdate();
+                }
+
+                // baseline benchmark password (used in benchmark requests)
+                try (PreparedStatement ps = conn.prepareStatement("""
+                        INSERT INTO password_pool(username, pw_hash, pw_hint, hit_count, blocked, last_use)
+                        VALUES(?, ?, ?, 0, 0, 0)
+                        """)) {
+                    String hash = PamAuthPasswordUtil.hashPassword(passwordChars);
+                    String hint = PamAuthPasswordUtil.makeHint(passwordChars);
+                    ps.setString(1, username);
+                    ps.setString(2, hash);
+                    ps.setString(3, hint);
+                    ps.executeUpdate();
+                }
+
+                // additional mock passwords to expand the pool size
+                try (PreparedStatement ps = conn.prepareStatement("""
+                        INSERT INTO password_pool(username, pw_hash, pw_hint, hit_count, blocked, last_use)
+                        VALUES(?, ?, ?, 0, 0, 0)
+                        """)) {
+                    for (int i = 1; i < TEST_BENCH_PASSWORD_POOL_SIZE; i++) {
+                        String candidate = "bench_password_" + i;
+                        char[] candidateChars = candidate.toCharArray();
+                        try {
+                            String hash = PamAuthPasswordUtil.hashPassword(candidateChars);
+                            String hint = PamAuthPasswordUtil.makeHint(candidateChars);
+                            ps.setString(1, username);
+                            ps.setString(2, hash);
+                            ps.setString(3, hint);
+                            ps.executeUpdate();
+                        } finally {
+                            Arrays.fill(candidateChars, '\0');
+                        }
+                    }
+                }
+            }
+
+            EncryptDecrypt.encryptFile(key, plainDb, targetEncFile);
+        } finally {
+            Arrays.fill(passwordChars, '\0');
+            deleteQuietly(plainDb);
+        }
+    }
+
+    private static BenchmarkIteration runAuthBenchmarkIteration(BenchmarkContext context) throws SQLException {
+        // 이전 iteration 잔여 메트릭 제거
+        SecureDbSession.consumeLastIoMetrics();
+
+        long started = System.nanoTime();
+        String result = context.handler().authenticate(context.username(), context.password());
+        long ended = System.nanoTime();
+
+        SecureDbSession.SessionIoMetrics ioMetrics = SecureDbSession.consumeLastIoMetrics();
+        if (ioMetrics == null) {
+            throw new ReplayShieldException(
+                    ErrorType.DATABASE_ACCESS,
+                    "Benchmark failed to capture decrypt/encrypt timings.");
+        }
+
+        long totalNanos = ended - started;
+        long decryptNanos = ioMetrics.decryptNanos();
+        long encryptNanos = ioMetrics.encryptNanos();
+        long authLogicNanos = totalNanos - decryptNanos - encryptNanos;
+        if (authLogicNanos < 0) {
+            authLogicNanos = 0L;
+        }
+
+        return new BenchmarkIteration(totalNanos, decryptNanos, authLogicNanos, encryptNanos, result);
+    }
+
+    private static void printBenchmarkSummary(String label, BenchmarkSummary summary) {
+        System.out.println("[" + label + "]");
+        System.out.printf("  total      : %.3f ms%n", nanosToMillis(summary.totalNanos()));
+        System.out.printf("  avg        : %.3f ms%n", nanosToMillis(summary.avgNanos()));
+        System.out.printf("  min        : %.3f ms%n", nanosToMillis(summary.minNanos()));
+        System.out.printf("  p50        : %.3f ms%n", nanosToMillis(summary.p50Nanos()));
+        System.out.printf("  p95        : %.3f ms%n", nanosToMillis(summary.p95Nanos()));
+        System.out.printf("  p99        : %.3f ms%n", nanosToMillis(summary.p99Nanos()));
+        System.out.printf("  max        : %.3f ms%n", nanosToMillis(summary.maxNanos()));
+        System.out.printf("  throughput : %.2f ops/s%n", summary.throughputOpsPerSec());
+        System.out.println();
+    }
+
+    private static BenchmarkSummary summarizeBenchmark(long[] samplesNanos) {
+        long[] sorted = Arrays.copyOf(samplesNanos, samplesNanos.length);
+        Arrays.sort(sorted);
+
+        long totalNanos = 0L;
+        for (long sample : samplesNanos) {
+            totalNanos += sample;
+        }
+
+        double avgNanos = totalNanos / (double) samplesNanos.length;
+        double throughputOpsPerSec = totalNanos == 0
+                ? 0.0
+                : (samplesNanos.length * 1_000_000_000.0) / totalNanos;
+
+        return new BenchmarkSummary(
+                sorted[0],
+                percentileNanos(sorted, 0.50),
+                percentileNanos(sorted, 0.95),
+                percentileNanos(sorted, 0.99),
+                sorted[sorted.length - 1],
+                totalNanos,
+                avgNanos,
+                throughputOpsPerSec);
+    }
+
+    private static long percentileNanos(long[] sortedSamples, double percentile) {
+        int index = (int) Math.ceil(percentile * sortedSamples.length) - 1;
+        if (index < 0) {
+            index = 0;
+        }
+        if (index >= sortedSamples.length) {
+            index = sortedSamples.length - 1;
+        }
+        return sortedSamples[index];
+    }
+
+    private static double nanosToMillis(long nanos) {
+        return nanos / 1_000_000.0;
+    }
+
+    private static double nanosToMillis(double nanos) {
+        return nanos / 1_000_000.0;
+    }
+
+    private static boolean containsArg(String[] args, String target) {
+        for (String arg : args) {
+            if (target.equals(arg)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void cacheAdminPassword() {

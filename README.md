@@ -6,7 +6,7 @@ ReplayShield is a lightweight HTTP authentication service that rejects recently 
 
 ## Key Features
 
-- CLI workflow via `replayshield init/manage/password/serve`:
+- CLI workflow via `replayshield init/manage/password/serve/benchmark`:
   - **init** – Initialization  
     Prompts for an admin password and creates an encrypted database with that key. Re-running overwrites the existing DB (re-initialization).
   - **manage** – Manage users/password pools  
@@ -19,6 +19,8 @@ ReplayShield is a lightweight HTTP authentication service that rejects recently 
     Stores the admin credential in tmpfs so `replayshield serve` can start in a headless environment.
   - **serve** – Run the authentication server  
     Uses the cached admin key to launch the HTTP server.
+  - **benchmark** – Run DB benchmark  
+    Measures real auth flow latency with per-iteration decrypt/encrypt timings (`--mode=actual|test`, `--warmup`, `--iterations`).
 
 - Encrypted SQLite DB: data is always encrypted on disk and decrypted only inside `/dev/shm`.
 - `/auth` HTTP POST endpoint returns `PASS`/`FAIL`, and the PAM helper consumes this result to decide login flow.

@@ -14,20 +14,37 @@ import dev.replayshield.util.ReplayShieldException.ErrorType;
 
 public final class SecureDbSession {
 
+    public record SessionIoMetrics(long decryptNanos, long encryptNanos) {
+    }
+
+    private static final ThreadLocal<SessionIoMetrics> LAST_IO_METRICS = new ThreadLocal<>();
+
     private SecureDbSession() {
     }
 
+    public static SessionIoMetrics consumeLastIoMetrics() {
+        SessionIoMetrics metrics = LAST_IO_METRICS.get();
+        LAST_IO_METRICS.remove();
+        return metrics;
+    }
+
     public static DbSession openReadOnly(byte[] key) {
-        Path encFile = PathResolver.getEncryptedDbFile().toPath();
+        return openReadOnly(key, PathResolver.getEncryptedDbFile().toPath());
+    }
+
+    public static DbSession openReadOnly(byte[] key, Path encFile) {
         if (!Files.exists(encFile)) {
             throw new ReplayShieldException(ErrorType.INITIALIZATION, "Encrypted DB not found. Run init first.");
         }
 
         Path tmp = PathResolver.createMemoryDbTempFile();
+        long decryptNanos = 0L;
         try {
+            long decryptStarted = System.nanoTime();
             EncryptDecrypt.decryptFile(key, encFile, tmp);
+            decryptNanos = System.nanoTime() - decryptStarted;
             Connection conn = Db.open(tmp);
-            return new DbSession(key, encFile, tmp, conn, false);
+            return new DbSession(key, encFile, tmp, conn, false, decryptNanos);
         } catch (ReplayShieldException exception) {
             Main.deleteQuietly(tmp);
             throw exception;
@@ -39,15 +56,21 @@ public final class SecureDbSession {
     }
 
     public static DbSession openWritable(byte[] key) {
-        Path encFile = PathResolver.getEncryptedDbFile().toPath();
+        return openWritable(key, PathResolver.getEncryptedDbFile().toPath());
+    }
+
+    public static DbSession openWritable(byte[] key, Path encFile) {
         Path tmp = PathResolver.createMemoryDbTempFile();
+        long decryptNanos = 0L;
 
         try {
             if (Files.exists(encFile)) {
+                long decryptStarted = System.nanoTime();
                 EncryptDecrypt.decryptFile(key, encFile, tmp);
+                decryptNanos = System.nanoTime() - decryptStarted;
             }
             Connection conn = Db.open(tmp);
-            return new DbSession(key, encFile, tmp, conn, true);
+            return new DbSession(key, encFile, tmp, conn, true, decryptNanos);
         } catch (ReplayShieldException exception) {
             Main.deleteQuietly(tmp);
             throw exception;
@@ -63,14 +86,22 @@ public final class SecureDbSession {
         private final Path tmpFile;
         private final Connection connection;
         private final boolean writable;
+        private final long decryptNanos;
         private boolean closed;
 
-        private DbSession(byte[] key, Path encFile, Path tmpFile, Connection connection, boolean writable) {
+        private DbSession(
+                byte[] key,
+                Path encFile,
+                Path tmpFile,
+                Connection connection,
+                boolean writable,
+                long decryptNanos) {
             this.key = key;
             this.encFile = encFile;
             this.tmpFile = tmpFile;
             this.connection = connection;
             this.writable = writable;
+            this.decryptNanos = decryptNanos;
         }
 
         public Connection connection() {
@@ -87,6 +118,7 @@ public final class SecureDbSession {
                 return;
             }
             closed = true;
+            long encryptNanos = 0L;
             ReplayShieldException pending = null;
             try {
                 connection.close();
@@ -99,7 +131,9 @@ public final class SecureDbSession {
 
             if (writable) {
                 try {
+                    long encryptStarted = System.nanoTime();
                     EncryptDecrypt.encryptFile(key, tmpFile, encFile);
+                    encryptNanos = System.nanoTime() - encryptStarted;
                 } catch (ReplayShieldException exception) {
                     pending = append(pending, exception);
                 } catch (Exception exception) {
@@ -122,8 +156,11 @@ public final class SecureDbSession {
             }
 
             if (pending != null) {
+                LAST_IO_METRICS.set(new SessionIoMetrics(decryptNanos, encryptNanos));
                 throw pending;
             }
+
+            LAST_IO_METRICS.set(new SessionIoMetrics(decryptNanos, encryptNanos));
         }
 
         private static ReplayShieldException append(ReplayShieldException existing, ReplayShieldException next) {

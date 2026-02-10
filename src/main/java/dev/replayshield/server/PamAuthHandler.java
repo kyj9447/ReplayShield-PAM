@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
@@ -24,9 +25,15 @@ import dev.replayshield.util.ReplayShieldException.ErrorType;
 public class PamAuthHandler {
 
     private final byte[] key;
+    private final Path encFileOverride;
 
     public PamAuthHandler(byte[] key) {
+        this(key, null);
+    }
+
+    public PamAuthHandler(byte[] key, Path encFileOverride) {
         this.key = key;
+        this.encFileOverride = encFileOverride;
     }
 
     public String handleHttpPost(HttpExchange exchange) throws SQLException {
@@ -78,7 +85,9 @@ public class PamAuthHandler {
 
     // PASS/FAIL
     public String authenticate(String username, String password) throws SQLException {
-        try (SecureDbSession.DbSession session = SecureDbSession.openWritable(key)) {
+        try (SecureDbSession.DbSession session = encFileOverride == null
+                ? SecureDbSession.openWritable(key)
+                : SecureDbSession.openWritable(key, encFileOverride)) {
             return doAuth(session.connection(), username, password);
         }
     }

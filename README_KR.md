@@ -9,7 +9,7 @@ ReplayShield는 PAM(예: SSH) 인증 과정에서 최근에 사용된 암호를 
 
 ## 주요 기능
 
-- `replayshield init/manage/password/serve` CLI로 아래 기능 제공
+- `replayshield init/manage/password/serve/benchmark` CLI로 아래 기능 제공
   - `init` : 초기화
     - 실행시 프롬프트로 Admin 암호를 입력하면 해당 암호로 암호화된 DB 파일 생성. 재실행시 해당 과정 다시 진행하고 DB파일 덮어씌워 초기화.
   - `manage` : 사용자/암호 풀 관리
@@ -22,6 +22,8 @@ ReplayShield는 PAM(예: SSH) 인증 과정에서 최근에 사용된 암호를 
     - `replayshield serve`시 사용할 Admin 암호 캐싱 ( tmpfs에 저장 )
   - `serve` : 인증 서버 실행
     - `replayshield serve`에서 저장한 캐싱된 Admin 암호를 사용해 인증 서버 실행
+  - `benchmark` : DB 성능 벤치마크
+    - 실제 인증 플로우를 측정하고 반복별 복호화/암호화 시간을 분리 기록 (`--mode=actual|test`, `--warmup`, `--iterations`)
 
 - 암호화된 SQLite DB: 디스크에는 항상 암호화된 상태로 저장되고 `/dev/shm` tmpfs에서만 복호화.
 - `/auth` HTTP POST 엔드포인트가 `PASS`/`FAIL`을 반환하여 PAM 스크립트가 인증 결과로 활용.
@@ -76,6 +78,19 @@ sudo dpkg -i replayshield_*.deb
 
 4. **PAM 동작 확인**
    - SSH 접속을 시도하면 PAM 스크립트가 `http://127.0.0.1:4444/auth` 에 사용자명/암호를 전달하고, 응답이 `PASS`일 때만 인증을 계속 진행합니다.
+
+## 4. 제한사항 및 전제 조건
+
+- **Java 버전 고정**: 실행/빌드 모두 Java 21 기준입니다.
+- **운영체제 전제**: Linux 환경을 전제로 동작합니다 (`/dev/shm`, `/proc/mounts`, PAM, systemd 사용).
+- **아키텍처/런타임 제약**: 빌드 산출물에는 SQLite 네이티브 라이브러리가 Linux x86_64(glibc)만 포함되며 ARM/aarch64, macOS, Windows, Alpine(musl) 환경은 지원하지 않습니다.
+- **메모리 파일시스템 필수**: `/dev/shm` 이 반드시 tmpfs(메모리 기반)여야 하고 쓰기 가능해야 합니다.
+- **root 권한 필수**: `replayshield` 모든 명령은 root(`sudo`)로 실행해야 합니다.
+- **TTY(대화형 콘솔) 필요 명령**: `init`, `manage`, `password`는 콘솔 입력이 필요하므로 비대화형 환경에서 실행할 수 없습니다.
+- **고정 경로 사용**: salt/암호화 DB/cache 파일 경로는 각각 `/etc/replayshield/salt.bin`, `/var/lib/replayshield/secure.db.enc`, `/dev/shm/replayshield/admin.key`로 고정되어 있습니다.
+- **로컬 루프백 바인딩**: 인증 서버는 `127.0.0.1:4444`에만 바인딩됩니다.
+- **PAM/도구 의존성**: `pam_exec.so expose_authtok` 기반 PAM 설정과 `curl`이 필요합니다.
+- **서비스 시작 전제**: `serve` 실행 전 `replayshield password`로 admin key를 캐시해야 하며, 정상 시작 시 캐시 키는 삭제됩니다(재시작/재부팅 시 재캐시 필요).
 
 ## 라이선스
 
