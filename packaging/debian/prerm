@@ -3,8 +3,10 @@ set -e
 
 case "$1" in
     remove|upgrade)
-        systemctl stop replayshield.service >/dev/null 2>&1 || true
-        systemctl disable replayshield.service >/dev/null 2>&1 || true
+        if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+            systemctl stop replayshield.service >/dev/null 2>&1 || true
+            systemctl disable replayshield.service >/dev/null 2>&1 || true
+        fi
         ;;
 esac
 

@@ -9,3 +9,6 @@ WorkingDirectory=/var/lib/replayshield
 ExecStartPre=/usr/bin/test -f /dev/shm/replayshield/admin.key
 ExecStart=/usr/bin/replayshield serve
 Restart=no
+
+[Install]
+WantedBy=multi-user.target

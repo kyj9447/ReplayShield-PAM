@@ -10,9 +10,10 @@ override_dh_auto_build:
 
 override_dh_auto_install:
 	dh_install
-	install -Dm755 packaging/replayshield.sh debian/replayshield/usr/bin/replayshield
+	install -Dm755 packaging/package-scripts/replayshield.sh debian/replayshield/usr/bin/replayshield
 
 override_dh_fixperms:
 	dh_fixperms
 	chmod 755 debian/replayshield/usr/bin/replayshield
 	chmod 755 debian/replayshield/usr/lib/replayshield/replayshield-pam.sh
+	chmod 755 debian/replayshield/usr/lib/replayshield/replayshield-login-notify.sh

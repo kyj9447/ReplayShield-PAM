@@ -39,9 +39,14 @@ sudo dpkg -i replayshield_*.deb
 ## 2. Configuration
 
 1. **PAM configuration**  
-   Add ReplayShield to `/etc/pam.d/sshd` (or your target PAM policy):
+   Add both ReplayShield PAM hooks:
+   - Add this auth hook to `/etc/pam.d/sshd` (or your target PAM policy):
    ```
    auth required pam_exec.so quiet expose_authtok /usr/lib/replayshield/replayshield-pam.sh
+   ```
+   - Add this session hook to both `/etc/pam.d/sshd` and `/etc/pam.d/login`:
+   ```
+   session optional pam_exec.so /usr/lib/replayshield/replayshield-login-notify.sh
    ```
    If you have deliberately replaced the default Unix password auth, comment out the relevant `@include common-...` lines:
    ```

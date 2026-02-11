@@ -40,9 +40,14 @@ sudo dpkg -i replayshield_*.deb
 ## 2. 설정
 
 1. **PAM 설정**
-   - `/etc/pam.d/sshd` 등에 다음 줄을 추가합니다.
+   - 아래 두 PAM 항목을 모두 추가합니다.
+   - `/etc/pam.d/sshd` 등에 다음 auth 줄을 추가합니다.
      ```
      auth required pam_exec.so quiet expose_authtok /usr/lib/replayshield/replayshield-pam.sh
+     ```
+   - `/etc/pam.d/sshd`, `/etc/pam.d/login`에 다음 session 줄을 추가합니다.
+     ```
+     session optional pam_exec.so /usr/lib/replayshield/replayshield-login-notify.sh
      ```
    - `/etc/pam.d/sshd` 등에 다음 줄을 주석 처리합니다. (기본 Unix 암호는 사용하지 않습니다.)
       ```
