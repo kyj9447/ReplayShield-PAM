@@ -12,14 +12,17 @@ All notable changes to this project are documented in this file.
 - Debian maintainer scripts now guard systemd commands in non-systemd environments.
 - Packaging script layout was reorganized (`packaging/package-scripts/`) to separate build tooling from package payload scripts.
 - PAM hook documentation and examples now consistently use `/usr/lib/replayshield/*` paths.
+- Removed benchmark actual-DB mode; benchmark now always runs on an isolated temporary DB.
+- Benchmark mock dataset now seeds 10 users with 100 passwords each (1000 tuples total).
+- Default benchmark measured iterations increased from 50 to 500.
+- Benchmark no longer prompts for ReplayShield admin password and now prints default test login credentials in CLI.
 - Project version updated to `0.3.1`.
 
 ## [0.3.0] - 2026-02-10
 
 ### Added
 - `benchmark` CLI command to measure authentication flow performance.
-- `benchmark --mode=actual` for real DB authentication flow measurement.
-- `benchmark --mode=test` for isolated temporary mock DB benchmark.
+- Benchmark options for configurable warmup/iterations.
 
 ### Changed
 - Benchmark output now reports end-to-end, decrypt, auth-logic, and encrypt timing summaries.

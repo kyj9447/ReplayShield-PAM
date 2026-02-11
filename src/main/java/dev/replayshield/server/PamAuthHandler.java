@@ -24,6 +24,15 @@ import dev.replayshield.util.ReplayShieldException.ErrorType;
 
 public class PamAuthHandler {
 
+    public record HttpFlowMetrics(
+            long totalNanos,
+            long readBodyNanos,
+            long parseFormNanos,
+            long authenticateNanos) {
+    }
+
+    private static final ThreadLocal<HttpFlowMetrics> LAST_HTTP_FLOW_METRICS = new ThreadLocal<>();
+
     private final byte[] key;
     private final Path encFileOverride;
 
@@ -37,17 +46,43 @@ public class PamAuthHandler {
     }
 
     public String handleHttpPost(HttpExchange exchange) throws SQLException {
-        String body = readRequestBody(exchange);
+        long totalStarted = System.nanoTime();
+        long readBodyNanos = 0L;
+        long parseFormNanos = 0L;
+        long authenticateNanos = 0L;
+        try {
+            long readBodyStarted = System.nanoTime();
+            String body = readRequestBody(exchange);
+            readBodyNanos = System.nanoTime() - readBodyStarted;
 
-        Map<String, String> form = parseFormUrlEncoded(body);
-        String username = form.get("username");
-        String password = form.get("password");
+            long parseFormStarted = System.nanoTime();
+            Map<String, String> form = parseFormUrlEncoded(body);
+            parseFormNanos = System.nanoTime() - parseFormStarted;
+            String username = form.get("username");
+            String password = form.get("password");
 
-        if (username == null || password == null) {
-            return "FAIL";
+            if (username == null || password == null) {
+                return "FAIL";
+            }
+
+            long authenticateStarted = System.nanoTime();
+            String result = authenticate(username, password);
+            authenticateNanos = System.nanoTime() - authenticateStarted;
+            return result;
+        } finally {
+            long totalNanos = System.nanoTime() - totalStarted;
+            LAST_HTTP_FLOW_METRICS.set(new HttpFlowMetrics(
+                    totalNanos,
+                    readBodyNanos,
+                    parseFormNanos,
+                    authenticateNanos));
         }
+    }
 
-        return authenticate(username, password);
+    public static HttpFlowMetrics consumeLastHttpFlowMetrics() {
+        HttpFlowMetrics metrics = LAST_HTTP_FLOW_METRICS.get();
+        LAST_HTTP_FLOW_METRICS.remove();
+        return metrics;
     }
 
     private String readRequestBody(HttpExchange exchange) {

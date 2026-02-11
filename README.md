@@ -20,7 +20,8 @@ ReplayShield is a lightweight HTTP authentication service that rejects recently 
   - **serve** – Run the authentication server  
     Uses the cached admin key to launch the HTTP server.
   - **benchmark** – Run DB benchmark  
-    Measures real auth flow latency with per-iteration decrypt/encrypt timings (`--mode=actual|test`, `--warmup`, `--iterations`).
+    Measures auth flow latency on an isolated temporary benchmark DB with per-iteration decrypt/encrypt timings (`--warmup`, `--iterations`).
+    No admin password prompt is required; CLI prints the default benchmark login (`bench_user_0` / `bench_password_0_0`).
 
 - Encrypted SQLite DB: data is always encrypted on disk and decrypted only inside `/dev/shm`.
 - `/auth` HTTP POST endpoint returns `PASS`/`FAIL`, and the PAM helper consumes this result to decide login flow.

@@ -22,15 +22,14 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-import dev.replayshield.db.Db;
 import dev.replayshield.db.SecureDbSession;
 import dev.replayshield.db.SecureDbSession.DbSession;
 import dev.replayshield.security.AdminKeyHolder;
-import dev.replayshield.security.EncryptDecrypt;
 import dev.replayshield.security.KeyLoader;
 import dev.replayshield.server.HttpAuthServer;
 import dev.replayshield.server.PamAuthHandler;
 import dev.replayshield.util.AsciiTable;
+import dev.replayshield.util.BenchmarkUtils;
 import dev.replayshield.util.ErrorReporter;
 import dev.replayshield.util.PathResolver;
 import dev.replayshield.util.ReplayShieldException;
@@ -41,10 +40,8 @@ public class Main {
     // 콘솔 선언
     public static final Console CONSOLE = System.console();
     private static final int MIN_PASSWORD_POOL_SIZE = 3;
-    private static final int DEFAULT_BENCH_WARMUP = 5;
-    private static final int DEFAULT_BENCH_ITERATIONS = 50;
-    private static final int TEST_BENCH_PASSWORD_POOL_SIZE = 100;
 
+    // main() 함수: 핵심 처리 로직 실행
     public static void main(String[] args) {
         Thread.setDefaultUncaughtExceptionHandler(
                 (thread, throwable) -> ErrorReporter.logFatal("Thread " + thread.getName(), throwable));
@@ -75,6 +72,7 @@ public class Main {
 
             // ======= 모드 분기 =======
             switch (args[0]) {
+                // 케이스 블록: 특정 명령/값 처리
                 case "init" -> {
 
                     // 콘솔 사용 가능 먼저 확인
@@ -85,6 +83,7 @@ public class Main {
                     }
                     runInitMode();
                 }
+                // 케이스 블록: 특정 명령/값 처리
                 case "manage" -> {
 
                     // 콘솔 사용 가능 먼저 확인
@@ -95,19 +94,23 @@ public class Main {
                     }
                     runManageMode();
                 }
+                // 케이스 블록: 특정 명령/값 처리
                 case "serve" -> {
                     server = runServerMode(); // server 인스턴스 받음 (종료용)
 
                     // 서버 유지
                     synchronized (server) {
+                        // 예외 처리 블록: 정상 처리 구간
                         try {
                             server.wait();
+                        // 예외 처리 블록: 오류 발생 시 처리
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
                             System.out.println("Main thread interrupted. Signaling server to stop.");
                         }
                     }
                 }
+                // 케이스 블록: 특정 명령/값 처리
                 case "password" -> {
 
                     // 콘솔 사용 가능 먼저 확인
@@ -118,27 +121,28 @@ public class Main {
                     }
                     cacheAdminPassword();
                 }
+                // 케이스 블록: 특정 명령/값 처리
                 case "benchmark" -> {
-                    if (CONSOLE == null) {
-                        throw new ReplayShieldException(
-                                ReplayShieldException.ErrorType.CONFIGURATION,
-                                "Interactive console required (TTY not detected)");
-                    }
-                    runBenchmarkMode(args);
+                    BenchmarkUtils.runBenchmarkMode(args);
                 }
                 default -> {
                     System.err.println("Unknown command. Use --help.");
                 }
             }
+        // 예외 처리 블록: 오류 발생 시 처리
         } catch (ReplayShieldException exception) {
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if (exception.getType() == ErrorType.SYSTEM_ENVIRONMENT) {
                 ErrorReporter.logFatal("main", exception);
+            // 기본 분기 블록: 모든 상위 조건 불만족 시 실행
             } else {
                 ErrorReporter.logError("main", exception);
             }
+        // 예외 처리 블록: 오류 발생 시 처리
         } catch (IOException | NoSuchAlgorithmException | NumberFormatException
                 | SQLException exception) {
             ErrorReporter.logError("main", exception);
+        // 정리 블록: 성공/실패와 무관하게 마무리
         } finally {
             // System.out.println("FINALLY Check");
             if (server != null) {
@@ -154,7 +158,7 @@ public class Main {
             manage : administrator CLI
             serve : Start HTTP auth server
             password : Cache admin password in RAM for headless serve
-            benchmark : measure auth flow (actual DB or test DB)
+            benchmark : measure auth flow (isolated benchmark DB)
             """;
 
     // ================================
@@ -163,6 +167,7 @@ public class Main {
     private static void runInitMode() throws IOException {
         boolean saltExists = KeyLoader.saltExists(); // salt파일 존재 확인
         boolean encDbExists = PathResolver.getEncryptedDbFile().exists(); // db파일 존재 확인
+        // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
         if (saltExists || encDbExists) {
             System.out.println("""
                     ██╗    ██╗  █████╗ ██████╗ ███╗   ██╗███╗   ██╗██╗███╗   ██╗ ██████╗
@@ -181,6 +186,7 @@ public class Main {
 
             // String answer = sc.nextLine().trim().toLowerCase();
             String answer = CONSOLE.readLine().toLowerCase();
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if (!"yes".equals(answer)) {
                 System.out.println("Initialization aborted.");
                 return;
@@ -196,443 +202,9 @@ public class Main {
             System.out.println("Initialization complete.");
             System.out.println("Run 'replayshield serve' to start the server.");
             System.out.println("or 'systemctl restart replayshield' to apply changes.");
+        // 기본 분기 블록: 모든 상위 조건 불만족 시 실행
         } else {
             System.out.println("Initialization aborted.");
-        }
-    }
-
-    // ================================
-    // SERVER 모드
-    // ================================
-    private static HttpAuthServer runServerMode() throws IOException {
-        byte[] key = tryConsumeCachedAdminKey();
-        if (key == null) {
-            throw new ReplayShieldException(
-                    ReplayShieldException.ErrorType.CONFIGURATION,
-                    "No cached admin password found. Run 'replayshield password' before starting the server.");
-        }
-        AdminKeyHolder.setKey(key);
-        int port = 4444;
-        HttpAuthServer server = new HttpAuthServer(port, key);
-        server.start();
-        System.out.println("ReplayShield server running on port " + port);
-        System.out.println("Use Ctrl+C to stop.");
-        return server; // main()에 서버 종료용으로 인스턴스 반환
-    }
-
-    private enum BenchmarkMode {
-        ACTUAL_DB,
-        TEST_DB
-    }
-
-    private record BenchmarkOptions(BenchmarkMode mode, int warmup, int iterations) {
-    }
-
-    private record BenchmarkContext(PamAuthHandler handler, String username, String password, Path tempEncFile) {
-    }
-
-    private record BenchmarkIteration(
-            long totalNanos,
-            long decryptNanos,
-            long authLogicNanos,
-            long encryptNanos,
-            String result) {
-    }
-
-    private record BenchmarkSummary(
-            long minNanos,
-            long p50Nanos,
-            long p95Nanos,
-            long p99Nanos,
-            long maxNanos,
-            long totalNanos,
-            double avgNanos,
-            double throughputOpsPerSec) {
-    }
-
-    private static void runBenchmarkMode(String[] args) throws IOException, SQLException, NoSuchAlgorithmException {
-        if (containsArg(args, "--help") || containsArg(args, "-h")) {
-            System.out.println("""
-                    Usage: replayshield benchmark [options]
-                      --mode=actual|test     Benchmark mode (default: test)
-                      --warmup=<N>           Warmup iterations (default: 5)
-                      --iterations=<N>       Measured iterations (default: 50)
-                    """);
-            return;
-        }
-
-        BenchmarkOptions options = parseBenchmarkOptions(args);
-        consoleClear("[ Benchmark ]");
-        System.out.println("mode       : " + toBenchmarkModeLabel(options.mode()));
-        System.out.println("warmup     : " + options.warmup());
-        System.out.println("iterations : " + options.iterations());
-        System.out.println();
-
-        byte[] key = KeyLoader.verifyAdminPassword();
-        BenchmarkContext context = null;
-        try {
-            context = prepareBenchmarkContext(options.mode(), key);
-            System.out.println("target user: " + context.username());
-            if (options.mode() == BenchmarkMode.TEST_DB) {
-                System.out.println("test db    : " + context.tempEncFile());
-            }
-            System.out.println();
-
-            for (int i = 0; i < options.warmup(); i++) {
-                runAuthBenchmarkIteration(context);
-            }
-
-            long[] totalSamples = new long[options.iterations()];
-            long[] decryptSamples = new long[options.iterations()];
-            long[] authLogicSamples = new long[options.iterations()];
-            long[] encryptSamples = new long[options.iterations()];
-            int passCount = 0;
-            int failCount = 0;
-            int otherCount = 0;
-
-            for (int i = 0; i < options.iterations(); i++) {
-                BenchmarkIteration iter = runAuthBenchmarkIteration(context);
-                totalSamples[i] = iter.totalNanos();
-                decryptSamples[i] = iter.decryptNanos();
-                authLogicSamples[i] = iter.authLogicNanos();
-                encryptSamples[i] = iter.encryptNanos();
-
-                if ("PASS".equals(iter.result())) {
-                    passCount++;
-                } else if ("FAIL".equals(iter.result())) {
-                    failCount++;
-                } else {
-                    otherCount++;
-                }
-            }
-
-            BenchmarkSummary totalSummary = summarizeBenchmark(totalSamples);
-            BenchmarkSummary decryptSummary = summarizeBenchmark(decryptSamples);
-            BenchmarkSummary authSummary = summarizeBenchmark(authLogicSamples);
-            BenchmarkSummary encryptSummary = summarizeBenchmark(encryptSamples);
-
-            System.out.println("Benchmark complete.");
-            System.out.printf("result     : PASS=%d FAIL=%d OTHER=%d%n", passCount, failCount, otherCount);
-            System.out.println();
-            printBenchmarkSummary("end-to-end", totalSummary);
-            printBenchmarkSummary("decrypt", decryptSummary);
-            printBenchmarkSummary("auth-logic", authSummary);
-            printBenchmarkSummary("encrypt", encryptSummary);
-            if (options.mode() == BenchmarkMode.ACTUAL_DB) {
-                System.out.println("note       : actual mode updates real DB state (history/hit_count/last_use).");
-            }
-        } finally {
-            if (context != null && context.tempEncFile() != null) {
-                deleteQuietly(context.tempEncFile());
-            }
-            Arrays.fill(key, (byte) 0);
-        }
-    }
-
-    private static BenchmarkOptions parseBenchmarkOptions(String[] args) {
-        BenchmarkMode mode = BenchmarkMode.TEST_DB;
-        int warmup = DEFAULT_BENCH_WARMUP;
-        int iterations = DEFAULT_BENCH_ITERATIONS;
-
-        for (int i = 1; i < args.length; i++) {
-            String arg = args[i];
-            if (arg.startsWith("--mode=")) {
-                mode = parseBenchmarkMode(arg.substring("--mode=".length()));
-                continue;
-            }
-            if (arg.startsWith("--warmup=")) {
-                warmup = parseNonNegativeIntOption("warmup", arg.substring("--warmup=".length()));
-                continue;
-            }
-            if (arg.startsWith("--iterations=")) {
-                iterations = parsePositiveIntOption("iterations", arg.substring("--iterations=".length()));
-                continue;
-            }
-            throw new ReplayShieldException(
-                    ErrorType.CONFIGURATION,
-                    "Unknown benchmark option: " + arg + " (use 'replayshield benchmark --help').");
-        }
-
-        return new BenchmarkOptions(mode, warmup, iterations);
-    }
-
-    private static BenchmarkMode parseBenchmarkMode(String value) {
-        String normalized = value.trim().toLowerCase();
-        return switch (normalized) {
-            case "actual", "actual-db" -> BenchmarkMode.ACTUAL_DB;
-            case "test", "test-db", "mock" -> BenchmarkMode.TEST_DB;
-            default -> throw new ReplayShieldException(
-                    ErrorType.CONFIGURATION,
-                    "Invalid benchmark mode: " + value + " (expected actual|test)");
-        };
-    }
-
-    private static int parseNonNegativeIntOption(String name, String raw) {
-        int parsed;
-        try {
-            parsed = Integer.parseInt(raw.trim());
-        } catch (NumberFormatException exception) {
-            throw new ReplayShieldException(
-                    ErrorType.CONFIGURATION,
-                    "Invalid integer for --" + name + ": " + raw,
-                    exception);
-        }
-        if (parsed < 0) {
-            throw new ReplayShieldException(
-                    ErrorType.CONFIGURATION,
-                    "--" + name + " must be >= 0");
-        }
-        return parsed;
-    }
-
-    private static int parsePositiveIntOption(String name, String raw) {
-        int parsed = parseNonNegativeIntOption(name, raw);
-        if (parsed == 0) {
-            throw new ReplayShieldException(
-                    ErrorType.CONFIGURATION,
-                    "--" + name + " must be >= 1");
-        }
-        return parsed;
-    }
-
-    private static String toBenchmarkModeLabel(BenchmarkMode mode) {
-        return switch (mode) {
-            case ACTUAL_DB -> "actual-db";
-            case TEST_DB -> "test-db";
-        };
-    }
-
-    private static BenchmarkContext prepareBenchmarkContext(BenchmarkMode mode, byte[] key)
-            throws IOException, SQLException, NoSuchAlgorithmException {
-        switch (mode) {
-            case ACTUAL_DB -> {
-                Path encFile = PathResolver.getEncryptedDbFile().toPath();
-                if (!Files.exists(encFile)) {
-                    throw new ReplayShieldException(ErrorType.INITIALIZATION, "Encrypted DB not found. Run init first.");
-                }
-                System.out.print("Benchmark username: ");
-                String username = CONSOLE.readLine().trim();
-                if (username.isEmpty()) {
-                    throw new ReplayShieldException(ErrorType.CONFIGURATION, "Benchmark username is required.");
-                }
-                System.out.print("Benchmark password: ");
-                char[] passwordChars = CONSOLE.readPassword();
-                if (passwordChars == null || passwordChars.length == 0) {
-                    throw new ReplayShieldException(ErrorType.CONFIGURATION, "Benchmark password is required.");
-                }
-                String password = new String(passwordChars);
-                Arrays.fill(passwordChars, '\0');
-                PamAuthHandler handler = new PamAuthHandler(key);
-                return new BenchmarkContext(handler, username, password, null);
-            }
-            case TEST_DB -> {
-                Path memoryDir = PathResolver.getMemoryDbDir().toPath();
-                if (!Files.exists(memoryDir)) {
-                    Files.createDirectories(memoryDir);
-                }
-                Path testEncFile = Files.createTempFile(memoryDir, "replayshield-bench-", ".enc");
-                String username = "bench_user";
-                String password = "bench_password";
-                setupMockEncryptedDb(key, testEncFile, username, password);
-                PamAuthHandler handler = new PamAuthHandler(key, testEncFile);
-                return new BenchmarkContext(handler, username, password, testEncFile);
-            }
-        }
-        throw new ReplayShieldException(ErrorType.CONFIGURATION, "Unsupported benchmark mode: " + mode);
-    }
-
-    private static void setupMockEncryptedDb(byte[] key, Path targetEncFile, String username, String password)
-            throws SQLException, NoSuchAlgorithmException {
-        Path plainDb = PathResolver.createMemoryDbTempFile();
-        char[] passwordChars = password.toCharArray();
-        try {
-            try (Connection conn = Db.open(plainDb)) {
-                try (PreparedStatement ps = conn.prepareStatement("""
-                        INSERT INTO user_config(username, block_count)
-                        VALUES(?, ?)
-                        """)) {
-                    ps.setString(1, username);
-                    ps.setInt(2, 0);
-                    ps.executeUpdate();
-                }
-
-                // baseline benchmark password (used in benchmark requests)
-                try (PreparedStatement ps = conn.prepareStatement("""
-                        INSERT INTO password_pool(username, pw_hash, pw_hint, hit_count, blocked, last_use)
-                        VALUES(?, ?, ?, 0, 0, 0)
-                        """)) {
-                    String hash = PamAuthPasswordUtil.hashPassword(passwordChars);
-                    String hint = PamAuthPasswordUtil.makeHint(passwordChars);
-                    ps.setString(1, username);
-                    ps.setString(2, hash);
-                    ps.setString(3, hint);
-                    ps.executeUpdate();
-                }
-
-                // additional mock passwords to expand the pool size
-                try (PreparedStatement ps = conn.prepareStatement("""
-                        INSERT INTO password_pool(username, pw_hash, pw_hint, hit_count, blocked, last_use)
-                        VALUES(?, ?, ?, 0, 0, 0)
-                        """)) {
-                    for (int i = 1; i < TEST_BENCH_PASSWORD_POOL_SIZE; i++) {
-                        String candidate = "bench_password_" + i;
-                        char[] candidateChars = candidate.toCharArray();
-                        try {
-                            String hash = PamAuthPasswordUtil.hashPassword(candidateChars);
-                            String hint = PamAuthPasswordUtil.makeHint(candidateChars);
-                            ps.setString(1, username);
-                            ps.setString(2, hash);
-                            ps.setString(3, hint);
-                            ps.executeUpdate();
-                        } finally {
-                            Arrays.fill(candidateChars, '\0');
-                        }
-                    }
-                }
-            }
-
-            EncryptDecrypt.encryptFile(key, plainDb, targetEncFile);
-        } finally {
-            Arrays.fill(passwordChars, '\0');
-            deleteQuietly(plainDb);
-        }
-    }
-
-    private static BenchmarkIteration runAuthBenchmarkIteration(BenchmarkContext context) throws SQLException {
-        // 이전 iteration 잔여 메트릭 제거
-        SecureDbSession.consumeLastIoMetrics();
-
-        long started = System.nanoTime();
-        String result = context.handler().authenticate(context.username(), context.password());
-        long ended = System.nanoTime();
-
-        SecureDbSession.SessionIoMetrics ioMetrics = SecureDbSession.consumeLastIoMetrics();
-        if (ioMetrics == null) {
-            throw new ReplayShieldException(
-                    ErrorType.DATABASE_ACCESS,
-                    "Benchmark failed to capture decrypt/encrypt timings.");
-        }
-
-        long totalNanos = ended - started;
-        long decryptNanos = ioMetrics.decryptNanos();
-        long encryptNanos = ioMetrics.encryptNanos();
-        long authLogicNanos = totalNanos - decryptNanos - encryptNanos;
-        if (authLogicNanos < 0) {
-            authLogicNanos = 0L;
-        }
-
-        return new BenchmarkIteration(totalNanos, decryptNanos, authLogicNanos, encryptNanos, result);
-    }
-
-    private static void printBenchmarkSummary(String label, BenchmarkSummary summary) {
-        System.out.println("[" + label + "]");
-        System.out.printf("  total      : %.3f ms%n", nanosToMillis(summary.totalNanos()));
-        System.out.printf("  avg        : %.3f ms%n", nanosToMillis(summary.avgNanos()));
-        System.out.printf("  min        : %.3f ms%n", nanosToMillis(summary.minNanos()));
-        System.out.printf("  p50        : %.3f ms%n", nanosToMillis(summary.p50Nanos()));
-        System.out.printf("  p95        : %.3f ms%n", nanosToMillis(summary.p95Nanos()));
-        System.out.printf("  p99        : %.3f ms%n", nanosToMillis(summary.p99Nanos()));
-        System.out.printf("  max        : %.3f ms%n", nanosToMillis(summary.maxNanos()));
-        System.out.printf("  throughput : %.2f ops/s%n", summary.throughputOpsPerSec());
-        System.out.println();
-    }
-
-    private static BenchmarkSummary summarizeBenchmark(long[] samplesNanos) {
-        long[] sorted = Arrays.copyOf(samplesNanos, samplesNanos.length);
-        Arrays.sort(sorted);
-
-        long totalNanos = 0L;
-        for (long sample : samplesNanos) {
-            totalNanos += sample;
-        }
-
-        double avgNanos = totalNanos / (double) samplesNanos.length;
-        double throughputOpsPerSec = totalNanos == 0
-                ? 0.0
-                : (samplesNanos.length * 1_000_000_000.0) / totalNanos;
-
-        return new BenchmarkSummary(
-                sorted[0],
-                percentileNanos(sorted, 0.50),
-                percentileNanos(sorted, 0.95),
-                percentileNanos(sorted, 0.99),
-                sorted[sorted.length - 1],
-                totalNanos,
-                avgNanos,
-                throughputOpsPerSec);
-    }
-
-    private static long percentileNanos(long[] sortedSamples, double percentile) {
-        int index = (int) Math.ceil(percentile * sortedSamples.length) - 1;
-        if (index < 0) {
-            index = 0;
-        }
-        if (index >= sortedSamples.length) {
-            index = sortedSamples.length - 1;
-        }
-        return sortedSamples[index];
-    }
-
-    private static double nanosToMillis(long nanos) {
-        return nanos / 1_000_000.0;
-    }
-
-    private static double nanosToMillis(double nanos) {
-        return nanos / 1_000_000.0;
-    }
-
-    private static boolean containsArg(String[] args, String target) {
-        for (String arg : args) {
-            if (target.equals(arg)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static void cacheAdminPassword() {
-        consoleClear("[ Cache Admin Password ]");
-        byte[] key = KeyLoader.verifyAdminPassword();
-        Path cachePath = PathResolver.getAdminKeyCacheFile().toPath();
-        try {
-            Path parent = cachePath.getParent();
-            if (parent != null && !Files.exists(parent)) {
-                Files.createDirectories(parent);
-            }
-            Files.write(cachePath, key);
-            try {
-                Files.setPosixFilePermissions(cachePath, PosixFilePermissions.fromString("rw-------"));
-            } catch (UnsupportedOperationException ignored) {
-            }
-            System.out.println("Admin password cached in RAM: " + cachePath);
-            System.out.println("Run 'sudo systemctl start replayshield' before the next reboot to reuse it.");
-        } catch (IOException exception) {
-            throw new ReplayShieldException(
-                    ReplayShieldException.ErrorType.SYSTEM_ENVIRONMENT,
-                    "Failed to cache admin password.",
-                    exception);
-        } finally {
-            Arrays.fill(key, (byte) 0);
-        }
-    }
-
-    private static byte[] tryConsumeCachedAdminKey() {
-        Path cachePath = PathResolver.getAdminKeyCacheFile().toPath();
-        if (!Files.exists(cachePath)) {
-            return null;
-        }
-        try {
-            byte[] key = Files.readAllBytes(cachePath);
-            Files.deleteIfExists(cachePath);
-            if (key.length == 0) {
-                return null;
-            }
-            return key;
-        } catch (IOException exception) {
-            throw new ReplayShieldException(
-                    ReplayShieldException.ErrorType.SYSTEM_ENVIRONMENT,
-                    "Failed to read cached admin password.",
-                    exception);
         }
     }
 
@@ -646,6 +218,7 @@ public class Main {
 
         // Scanner sc = new Scanner(System.in);
         boolean running = true;
+        // 반복 블록: 조건이 참인 동안 처리
         while (running) {
             String prompt = """
                     1) Add new user
@@ -656,6 +229,7 @@ public class Main {
                     0) Exit
                     >""";
             int sel = readInt(prompt);
+            // 선택 분기 블록: 입력 값에 따라 케이스 분기
             switch (sel) {
                 case 1 ->
                     manageAddUser(key);
@@ -676,17 +250,21 @@ public class Main {
         System.out.println("Exiting...");
     }
 
+    // manageAddUser() 함수: 핵심 처리 로직 실행
     private static void manageAddUser(byte[] key)
             throws SQLException, NoSuchAlgorithmException, ReplayShieldException {
         consoleClear("[ Add New User ]");
         String username;
+        // 반복 블록: 조건이 참인 동안 처리
         while (true) {
             System.out.print("New username (type CANCEL to cancel): ");
             username = CONSOLE.readLine().trim();
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if ("CANCEL".equalsIgnoreCase(username)) {
                 consoleClear();
                 return;
             }
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if (username.isEmpty()) {
                 System.out.println("Username cannot be empty.");
                 continue;
@@ -694,16 +272,20 @@ public class Main {
 
             // username 중복검사
             boolean exists;
+            // 예외 처리 블록: 정상 처리 구간
             try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key);
                     PreparedStatement ps = session.connection()
                             .prepareStatement("SELECT 1 FROM user_config WHERE username=?")) {
                 ps.setString(1, username);
+                // 예외 처리 블록: 정상 처리 구간
                 try (ResultSet rs = ps.executeQuery()) {
                     exists = rs.next();
                 }
             }
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if (exists) {
                 System.out.println("Username already exists. Choose another.");
+            // 기본 분기 블록: 모든 상위 조건 불만족 시 실행
             } else {
                 break;
             }
@@ -712,10 +294,13 @@ public class Main {
         // 비밀번호 최소 3개 이상
         System.out.println("Enter at least " + MIN_PASSWORD_POOL_SIZE + " passwords (blank line to finish):");
         List<char[]> pwList = new ArrayList<>();
+        // 반복 블록: 조건이 참인 동안 처리
         while (true) {
             System.out.print("Password #" + (pwList.size() + 1) + ": ");
             char[] input = CONSOLE.readPassword();
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if (input.length == 0) {
+                // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
                 if (pwList.size() < MIN_PASSWORD_POOL_SIZE) {
                     System.out.println("At least " + MIN_PASSWORD_POOL_SIZE + " passwords are required.");
                     continue;
@@ -724,6 +309,7 @@ public class Main {
             }
             System.out.print("Re-enter to confirm: ");
             char[] confirm = CONSOLE.readPassword();
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if (!Arrays.equals(input, confirm)) {
                 System.out.println("Passwords did not match. Please try again.");
                 Arrays.fill(input, '\0');
@@ -735,6 +321,7 @@ public class Main {
             // 중복검사
             boolean duplicate = pwList.stream()
                     .anyMatch(existing -> Arrays.equals(existing, input));
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if (duplicate) {
                 System.out.println("This password was already entered. Please use a different one.");
                 Arrays.fill(input, '\0'); // 즉시 삭제
@@ -748,9 +335,11 @@ public class Main {
         // block 수 지정
         int maxPwCount = pwList.size();
         int blockCount;
+        // 반복 블록: 조건이 참인 동안 처리
         while (true) {
             String prompt = "Block count (1 ~ " + (maxPwCount - 1) + "): ";
             blockCount = readInt(prompt);
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if (blockCount >= 1 && blockCount < maxPwCount) {
                 break; // 올바른 범위면 반복 종료
             }
@@ -760,6 +349,7 @@ public class Main {
         // DB 저장 진행
         try (DbSession session = SecureDbSession.openWritable(key)) {
             Connection conn = session.connection();
+            // 예외 처리 블록: 정상 처리 구간
             try (PreparedStatement ps = conn.prepareStatement("""
                     INSERT INTO user_config(username, block_count)
                     VALUES(?, ?)
@@ -768,9 +358,11 @@ public class Main {
                 ps.setInt(2, blockCount);
                 ps.executeUpdate();
             }
+            // 반복 블록: 컬렉션/범위를 순회하며 처리
             for (char[] pw : pwList) {
                 String hash = PamAuthPasswordUtil.hashPassword(pw);
                 String hint = PamAuthPasswordUtil.makeHint(pw);
+                // 예외 처리 블록: 정상 처리 구간
                 try (PreparedStatement ps = conn.prepareStatement("""
                         INSERT INTO password_pool(username, pw_hash, pw_hint, hit_count, blocked)
                         VALUES(?, ?, ?, 0, 0)
@@ -790,62 +382,77 @@ public class Main {
         }
     }
 
+    // manageDeleteUser() 함수: 핵심 처리 로직 실행
     private static void manageDeleteUser(byte[] key) throws SQLException, ReplayShieldException {
         consoleClear("[ Delete User ]");
+        // 반복 블록: 조건이 참인 동안 처리
         while (true) {
             System.out.print("Username to delete (type CANCEL to cancel): ");
             String username = CONSOLE.readLine().trim();
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if ("CANCEL".equalsIgnoreCase(username)) {
                 consoleClear();
                 return;
             }
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if (username.isEmpty()) {
                 System.out.println("Username required.");
                 continue;
             }
             boolean exists;
+            // 예외 처리 블록: 정상 처리 구간
             try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key);
                     PreparedStatement ps = session.connection()
                             .prepareStatement("SELECT 1 FROM user_config WHERE username=?")) {
                 ps.setString(1, username);
+                // 예외 처리 블록: 정상 처리 구간
                 try (ResultSet rs = ps.executeQuery()) {
                     exists = rs.next();
                 }
             }
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if (!exists) {
                 System.out.println("User not found.");
                 continue;
             }
             System.out.print("Type DELETE to confirm removal of '" + username + "': ");
             String confirm = CONSOLE.readLine().trim();
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if (!"DELETE".equalsIgnoreCase(confirm)) {
                 consoleClear("[ Deletion aborted. ]");
                 return;
             }
+            // 예외 처리 블록: 정상 처리 구간
             try (DbSession session = SecureDbSession.openWritable(key)) {
                 Connection conn = session.connection();
                 boolean originalAutoCommit = conn.getAutoCommit();
                 conn.setAutoCommit(false);
+                // 예외 처리 블록: 정상 처리 구간
                 try {
+                    // 예외 처리 블록: 정상 처리 구간
                     try (PreparedStatement ps = conn.prepareStatement(
                             "DELETE FROM password_pool WHERE username=?")) {
                         ps.setString(1, username);
                         ps.executeUpdate();
                     }
+                    // 예외 처리 블록: 정상 처리 구간
                     try (PreparedStatement ps = conn.prepareStatement(
                             "DELETE FROM password_history WHERE username=?")) {
                         ps.setString(1, username);
                         ps.executeUpdate();
                     }
+                    // 예외 처리 블록: 정상 처리 구간
                     try (PreparedStatement ps = conn.prepareStatement(
                             "DELETE FROM user_config WHERE username=?")) {
                         ps.setString(1, username);
                         ps.executeUpdate();
                     }
                     conn.commit();
+                // 예외 처리 블록: 오류 발생 시 처리
                 } catch (SQLException exception) {
                     conn.rollback();
                     throw exception;
+                // 정리 블록: 성공/실패와 무관하게 마무리
                 } finally {
                     conn.setAutoCommit(originalAutoCommit);
                 }
@@ -855,29 +462,36 @@ public class Main {
         }
     }
 
+    // manageUserMenu() 함수: 핵심 처리 로직 실행
     private static void manageUserMenu(byte[] key)
             throws SQLException, ReplayShieldException, NoSuchAlgorithmException {
         String username;
+        // 반복 블록: 조건이 참인 동안 처리
         while (true) {
             System.out.print("Target username (type CANCEL to cancel): ");
             username = CONSOLE.readLine().trim();
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if ("CANCEL".equalsIgnoreCase(username)) {
                 consoleClear();
                 return; // 사용자 취소
             }
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if (username.isEmpty()) {
                 System.out.println("Username required.");
                 continue;
             }
             boolean exists;
+            // 예외 처리 블록: 정상 처리 구간
             try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key);
                     PreparedStatement ps = session.connection()
                             .prepareStatement("SELECT 1 FROM user_config WHERE username=?")) {
                 ps.setString(1, username);
+                // 예외 처리 블록: 정상 처리 구간
                 try (ResultSet rs = ps.executeQuery()) {
                     exists = rs.next();
                 }
             }
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if (exists) {
                 consoleClear();
                 break; // 루프 탈출, 해당 사용자로 다음 단계 진행
@@ -885,10 +499,12 @@ public class Main {
             System.out.println("User not found.");
         }
         boolean running = true;
+        // 반복 블록: 조건이 참인 동안 처리
         while (running) {
             System.out.println("[ Manage User: " + username + " ]");
             String prompt = "1) Show PW pool\n2) Add password\n3) Delete password\n4) Change block_count\n0) Back\n>";
             int sel = readInt(prompt);
+            // 선택 분기 블록: 입력 값에 따라 케이스 분기
             switch (sel) {
                 case 1 ->
                     showUserPwPool(key, username);
@@ -907,11 +523,14 @@ public class Main {
         consoleClear();
     }
 
+    // showUserPwPool() 함수: 핵심 처리 로직 실행
     private static void showUserPwPool(byte[] key, String username) throws SQLException, ReplayShieldException {
+        // 예외 처리 블록: 정상 처리 구간
         try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key)) {
             consoleClear();
             Connection conn = session.connection();
             SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+            // 예외 처리 블록: 정상 처리 구간
             try (PreparedStatement ps = conn.prepareStatement("""
                     SELECT id, pw_hint, hit_count, blocked, last_use
                     FROM password_pool
@@ -919,6 +538,7 @@ public class Main {
                     ORDER BY id
                     """)) {
                 ps.setString(1, username);
+                // 예외 처리 블록: 정상 처리 구간
                 try (ResultSet rs = ps.executeQuery()) {
                     AsciiTable table = AsciiTable.columnBuilder()
                             .addColumn("ID", 4, AsciiTable.Align.RIGHT)
@@ -927,6 +547,7 @@ public class Main {
                             .addColumn("BLOCKED", 7, AsciiTable.Align.CENTER)
                             .addColumn("LAST USE", 17, AsciiTable.Align.LEFT)
                             .build();
+                    // 반복 블록: 조건이 참인 동안 처리
                     while (rs.next()) {
                         long lastUseValue = rs.getLong("last_use");
                         String lastUse = lastUseValue > 0
@@ -947,16 +568,20 @@ public class Main {
         }
     }
 
+    // addUserPassword() 함수: 핵심 처리 로직 실행
     private static void addUserPassword(byte[] key, String username)
             throws SQLException, NoSuchAlgorithmException, ReplayShieldException {
         consoleClear("[ Manage User: " + username + " ]");
         // 1) 기존 해시 목록 수집
         Set<String> existingHashes = new HashSet<>();
+        // 예외 처리 블록: 정상 처리 구간
         try (var session = SecureDbSession.openReadOnly(key);
                 var ps = session.connection().prepareStatement(
                         "SELECT pw_hash FROM password_pool WHERE username=?")) {
             ps.setString(1, username);
+            // 예외 처리 블록: 정상 처리 구간
             try (var rs = ps.executeQuery()) {
+                // 반복 블록: 조건이 참인 동안 처리
                 while (rs.next()) {
                     existingHashes.add(rs.getString(1));
                 }
@@ -965,6 +590,7 @@ public class Main {
 
         // 2) 새 암호 입력
         char[] pw;
+        // 반복 블록: 조건이 참인 동안 처리
         while (true) {
             System.out.print("New password: ");
             pw = CONSOLE.readPassword();
@@ -978,6 +604,7 @@ public class Main {
             // 2중 확인
             System.out.print("Confirm password: ");
             char[] confirm = CONSOLE.readPassword();
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if (!Arrays.equals(pw, confirm)) {
                 System.out.println("Passwords do not match.");
                 Arrays.fill(pw, '\0');
@@ -988,6 +615,7 @@ public class Main {
 
             // 중복검사
             String newHash = PamAuthPasswordUtil.hashPassword(pw);
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if (existingHashes.contains(newHash)) {
                 System.out.println("This password is already registered. Enter a different one.");
                 Arrays.fill(pw, '\0'); // 즉시 삭제
@@ -1013,23 +641,28 @@ public class Main {
         }
     }
 
+    // deleteUserPassword() 함수: 핵심 처리 로직 실행
     private static void deleteUserPassword(byte[] key, String username)
             throws SQLException, ReplayShieldException {
 
         // 삭제 대상 암호 선택
         int id;
+        // 반복 블록: 조건이 참인 동안 처리
         while (true) {
 
             // PW Pool 먼저 출력
             showUserPwPool(key, username);
             id = readInt("Password ID to delete (0 to cancel): ");
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if (id == 0) {
                 consoleClear("[ Deletion canceled. ]");
                 return;
             }
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if (id > 0) {
                 int passwordCount;
                 int blockCount;
+                // 예외 처리 블록: 정상 처리 구간
                 try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key)) {
                     Connection conn = session.connection();
 
@@ -1038,6 +671,7 @@ public class Main {
                             SELECT COUNT(*) FROM password_pool WHERE username=?
                             """)) {
                         ps.setString(1, username);
+                        // 예외 처리 블록: 정상 처리 구간
                         try (ResultSet rs = ps.executeQuery()) {
                             rs.next();
                             passwordCount = rs.getInt(1);
@@ -1049,7 +683,9 @@ public class Main {
                             SELECT block_count FROM user_config WHERE username=?
                             """)) {
                         ps.setString(1, username);
+                        // 예외 처리 블록: 정상 처리 구간
                         try (ResultSet rs = ps.executeQuery()) {
+                            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
                             if (!rs.next()) {
                                 consoleClear("[ User not found. ]");
                                 return;
@@ -1065,6 +701,7 @@ public class Main {
                     consoleClear("[ Need at least " + MIN_PASSWORD_POOL_SIZE + " passwords per user. ]");
                     return;
                 }
+                // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
                 if (blockCount <= 1) {
                     consoleClear("[ block_count cannot be reduced below 1. ]");
                     return;
@@ -1077,10 +714,12 @@ public class Main {
                     Connection conn = session.connection();
                     boolean originalAutoCommit = conn.getAutoCommit(); // 자동커밋상태 기록
                     conn.setAutoCommit(false); // 자동커밋 끔
+                    // 예외 처리 블록: 정상 처리 구간
                     try {
 
                         // 1. 패스워드 풀 삭제 시도
                         int deleted;
+                        // 예외 처리 블록: 정상 처리 구간
                         try (PreparedStatement ps = conn.prepareStatement("""
                                 DELETE FROM password_pool
                                 WHERE id = ? AND username = ?
@@ -1091,6 +730,7 @@ public class Main {
                         }
                         // 2. 블록 카운트 감소 및 커밋 시도
                         if (deleted > 0) {
+                            // 예외 처리 블록: 정상 처리 구간
                             try (PreparedStatement ps = conn.prepareStatement("""
                                     UPDATE user_config SET block_count=? WHERE username=?
                                     """)) {
@@ -1107,31 +747,38 @@ public class Main {
                         // 삭제 실패시 롤백
                         conn.rollback();
                         System.out.println("No such password for this user.");
+                    // 예외 처리 블록: 오류 발생 시 처리
                     } catch (SQLException exception) {
                         // 예외 발생시 롤백
                         conn.rollback();
                         throw exception;
+                    // 정리 블록: 성공/실패와 무관하게 마무리
                     } finally {
                         conn.setAutoCommit(originalAutoCommit); // 원래 자동커밋 상태로 복원
                     }
                 }
+            // 기본 분기 블록: 모든 상위 조건 불만족 시 실행
             } else {
                 System.out.println("ID must be positive.");
             }
         }
     }
 
+    // changeUserBlockCount() 함수: 핵심 처리 로직 실행
     private static void changeUserBlockCount(byte[] key, String username)
             throws SQLException, ReplayShieldException {
 
         // 현재 PW 갯수 확인
         int pwCount;
+        // 예외 처리 블록: 정상 처리 구간
         try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key)) {
             Connection conn = session.connection();
+            // 예외 처리 블록: 정상 처리 구간
             try (PreparedStatement ps = conn.prepareStatement("""
                     SELECT COUNT(*) FROM password_pool WHERE username=?
                     """)) {
                 ps.setString(1, username);
+                // 예외 처리 블록: 정상 처리 구간
                 try (ResultSet rs = ps.executeQuery()) {
                     rs.next();
                     pwCount = rs.getInt(1);
@@ -1145,9 +792,11 @@ public class Main {
             return;
         }
         int bc;
+        // 반복 블록: 조건이 참인 동안 처리
         while (true) {
             String prompt = "New block_count (1 ~ " + (pwCount - 1) + "): ";
             bc = readInt(prompt);
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
             if (bc >= 1 && bc < pwCount) {
                 break; // 조건 만족 시 탈출
             }
@@ -1157,6 +806,7 @@ public class Main {
         // DB UPDATE
         try (DbSession session = SecureDbSession.openWritable(key)) {
             Connection conn = session.connection();
+            // 예외 처리 블록: 정상 처리 구간
             try (PreparedStatement ps = conn.prepareStatement("""
                     UPDATE user_config SET block_count=? WHERE username=?
                     """)) {
@@ -1174,19 +824,23 @@ public class Main {
     // ================================
     private static void manageDebugDbDumpInternal(byte[] key) throws SQLException, ReplayShieldException {
         consoleClear();
+        // 예외 처리 블록: 정상 처리 구간
         try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key)) {
             Connection conn = session.connection();
+            // 예외 처리 블록: 정상 처리 구간
             try (Statement st = conn.createStatement()) {
                 SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
                 System.out.println("--------------------------------------------------");
                 System.out.println("TABLE: user_config");
                 System.out.println("--------------------------------------------------");
+                // 예외 처리 블록: 정상 처리 구간
                 try (ResultSet rs = st.executeQuery(
                         "SELECT username, block_count FROM user_config ORDER BY username")) {
                     AsciiTable table = AsciiTable.columnBuilder()
                             .addColumn("USER", 20, AsciiTable.Align.LEFT)
                             .addColumn("block_count", 12, AsciiTable.Align.RIGHT)
                             .build();
+                    // 반복 블록: 조건이 참인 동안 처리
                     while (rs.next()) {
                         table.addRow(
                                 rs.getString(1),
@@ -1198,6 +852,7 @@ public class Main {
                 System.out.println("--------------------------------------------------");
                 System.out.println("TABLE: password_pool");
                 System.out.println("--------------------------------------------------");
+                // 예외 처리 블록: 정상 처리 구간
                 try (ResultSet rs = st.executeQuery("""
                         SELECT id, username, pw_hash, pw_hint, hit_count, blocked, last_use
                         FROM password_pool
@@ -1212,6 +867,7 @@ public class Main {
                             .addColumn("BLOCKED", 7, AsciiTable.Align.CENTER)
                             .addColumn("LAST USE", 17, AsciiTable.Align.LEFT)
                             .build();
+                    // 반복 블록: 조건이 참인 동안 처리
                     while (rs.next()) {
                         long lastUseValue = rs.getLong("last_use");
                         String lastUse = lastUseValue > 0 ? sdf.format(new Date(lastUseValue)) : "-";
@@ -1230,6 +886,7 @@ public class Main {
                 System.out.println("--------------------------------------------------");
                 System.out.println("TABLE: password_history");
                 System.out.println("--------------------------------------------------");
+                // 예외 처리 블록: 정상 처리 구간
                 try (ResultSet rs = st.executeQuery("""
                         SELECT id, username, pw_hash, pw_hint, created_at
                         FROM password_history
@@ -1242,6 +899,7 @@ public class Main {
                             .addColumn("HINT", 10, AsciiTable.Align.LEFT)
                             .addColumn("TIME", 19, AsciiTable.Align.LEFT)
                             .build();
+                    // 반복 블록: 조건이 참인 동안 처리
                     while (rs.next()) {
                         long ts = rs.getLong("created_at");
                         String time = sdf.format(new Date(ts));
@@ -1262,10 +920,92 @@ public class Main {
     // 암호 변경
     private static void manageChangeAdminPassword(byte[] key) throws SQLException, ReplayShieldException {
         byte[] updated = KeyLoader.changeAdminPassword(key);
+        // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
         if (updated != null) {
             AdminKeyHolder.setKey(updated);
         }
         consoleClear("Admin password updated.");
+    }
+
+    // ================================
+    // SERVER 모드
+    // ================================
+    private static HttpAuthServer runServerMode() throws IOException {
+        byte[] key = tryConsumeCachedAdminKey();
+        // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
+        if (key == null) {
+            throw new ReplayShieldException(
+                    ReplayShieldException.ErrorType.CONFIGURATION,
+                    "No cached admin password found. Run 'replayshield password' before starting the server.");
+        }
+        AdminKeyHolder.setKey(key);
+        int port = 4444;
+        HttpAuthServer server = new HttpAuthServer(port, key);
+        server.start();
+        System.out.println("ReplayShield server running on port " + port);
+        System.out.println("Use Ctrl+C to stop.");
+        return server; // main()에 서버 종료용으로 인스턴스 반환
+    }
+
+    // tryConsumeCachedAdminKey() 함수: 핵심 처리 로직 실행
+    private static byte[] tryConsumeCachedAdminKey() {
+        Path cachePath = PathResolver.getAdminKeyCacheFile().toPath();
+        // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
+        if (!Files.exists(cachePath)) {
+            return null;
+        }
+        // 예외 처리 블록: 정상 처리 구간
+        try {
+            byte[] key = Files.readAllBytes(cachePath);
+            Files.deleteIfExists(cachePath);
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
+            if (key.length == 0) {
+                return null;
+            }
+            return key;
+        // 예외 처리 블록: 오류 발생 시 처리
+        } catch (IOException exception) {
+            throw new ReplayShieldException(
+                    ReplayShieldException.ErrorType.SYSTEM_ENVIRONMENT,
+                    "Failed to read cached admin password.",
+                    exception);
+        }
+    }
+
+    // ================================
+    // PASSWORD 모드
+    // ================================
+    // cacheAdminPassword() 함수: 핵심 처리 로직 실행
+    private static void cacheAdminPassword() {
+        consoleClear("[ Cache Admin Password ]");
+        byte[] key = KeyLoader.verifyAdminPassword();
+        Path cachePath = PathResolver.getAdminKeyCacheFile().toPath();
+        // 예외 처리 블록: 정상 처리 구간
+        try {
+            Path parent = cachePath.getParent();
+            // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
+            if (parent != null && !Files.exists(parent)) {
+                Files.createDirectories(parent);
+            }
+            Files.write(cachePath, key);
+            // 예외 처리 블록: 정상 처리 구간
+            try {
+                Files.setPosixFilePermissions(cachePath, PosixFilePermissions.fromString("rw-------"));
+            // 예외 처리 블록: 오류 발생 시 처리
+            } catch (UnsupportedOperationException ignored) {
+            }
+            System.out.println("Admin password cached in RAM: " + cachePath);
+            System.out.println("Run 'sudo systemctl start replayshield' before the next reboot to reuse it.");
+        // 예외 처리 블록: 오류 발생 시 처리
+        } catch (IOException exception) {
+            throw new ReplayShieldException(
+                    ReplayShieldException.ErrorType.SYSTEM_ENVIRONMENT,
+                    "Failed to cache admin password.",
+                    exception);
+        // 정리 블록: 성공/실패와 무관하게 마무리
+        } finally {
+            Arrays.fill(key, (byte) 0);
+        }
     }
 
     // ================================
@@ -1300,37 +1040,50 @@ public class Main {
     // 숫자 입력받기용 헬퍼 함수
     private static int readInt(String prompt) {
         System.out.print(prompt);
+        // 반복 블록: 조건이 참인 동안 처리
         while (true) {
             String line = CONSOLE.readLine().trim();
+            // 예외 처리 블록: 정상 처리 구간
             try {
                 return Integer.parseInt(line);
+            // 예외 처리 블록: 오류 발생 시 처리
             } catch (NumberFormatException e) {
                 System.out.println("Invalid number. Please enter an integer.");
             }
         }
     }
 
+    // deleteQuietly() 함수: 핵심 처리 로직 실행
     public static void deleteQuietly(Path tmp) {
+        // 예외 처리 블록: 정상 처리 구간
         try {
             Files.deleteIfExists(tmp);
+        // 예외 처리 블록: 오류 발생 시 처리
         } catch (IOException ignored) {
         }
     }
 
+    // consoleClear() 함수: 핵심 처리 로직 실행
     private static void consoleClear() {
+        // 예외 처리 블록: 정상 처리 구간
         try {
             new ProcessBuilder("clear").inheritIO().start().waitFor();
+        // 예외 처리 블록: 오류 발생 시 처리
         } catch (IOException | InterruptedException ignored) {
         }
         System.out.println("=== ReplayShield Manage CLI ===");
     }
 
+    // consoleClear() 함수: 핵심 처리 로직 실행
     private static void consoleClear(String payload) {
+        // 예외 처리 블록: 정상 처리 구간
         try {
             new ProcessBuilder("clear").inheritIO().start().waitFor();
+        // 예외 처리 블록: 오류 발생 시 처리
         } catch (IOException | InterruptedException ignored) {
         }
         System.out.println("=== ReplayShield Manage CLI ===");
+        // 조건 분기 블록: 조건 만족 여부에 따라 흐름 분기
         if (payload != null) {
             System.out.println(payload);
         }

@@ -5,6 +5,10 @@ replayshield (0.3.1-1) unstable; urgency=medium
   * Add systemd [Install] metadata and improve maintainer script behavior in
     non-systemd environments.
   * Standardize PAM hook path/documentation to /usr/lib/replayshield.
+  * Remove benchmark actual-db mode; benchmark now runs on isolated temporary DB only.
+  * Expand benchmark mock data to 10 users x 100 passwords (1000 tuples total).
+  * Increase default benchmark measured iterations from 50 to 500.
+  * Remove benchmark admin-password prompt and print default test login credentials.
   * Reorganize packaging shell scripts under packaging/package-scripts/.
 
  -- YoungJin Ko <kyj9447@gmail.com>  Wed, 11 Feb 2026 00:00:00 +0000
@@ -12,7 +16,7 @@ replayshield (0.3.1-1) unstable; urgency=medium
 replayshield (0.3.0-1) unstable; urgency=medium
 
   * Release 0.3.0.
-  * Add benchmark command with actual/test modes.
+  * Add benchmark command with configurable warmup/iterations.
   * Report decrypt/encrypt timing breakdown in benchmark output.
   * Expand test benchmark password pool size to 100 entries.
 

@@ -23,7 +23,8 @@ ReplayShield는 PAM(예: SSH) 인증 과정에서 최근에 사용된 암호를 
   - `serve` : 인증 서버 실행
     - `replayshield serve`에서 저장한 캐싱된 Admin 암호를 사용해 인증 서버 실행
   - `benchmark` : DB 성능 벤치마크
-    - 실제 인증 플로우를 측정하고 반복별 복호화/암호화 시간을 분리 기록 (`--mode=actual|test`, `--warmup`, `--iterations`)
+    - 격리된 임시 벤치마크 DB에서 인증 플로우를 측정하고 반복별 복호화/암호화 시간을 분리 기록 (`--warmup`, `--iterations`)
+    - Admin 암호 입력이 필요 없으며, 기본 테스트 로그인(`bench_user_0` / `bench_password_0_0`)을 CLI에 표시
 
 - 암호화된 SQLite DB: 디스크에는 항상 암호화된 상태로 저장되고 `/dev/shm` tmpfs에서만 복호화.
 - `/auth` HTTP POST 엔드포인트가 `PASS`/`FAIL`을 반환하여 PAM 스크립트가 인증 결과로 활용.
