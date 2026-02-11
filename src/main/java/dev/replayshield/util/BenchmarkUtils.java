@@ -294,19 +294,24 @@ public final class BenchmarkUtils {
         return sha256.digest(BENCHMARK_INTERNAL_KEY_SEED.getBytes(StandardCharsets.UTF_8));
     }
 
+    // 벤치마크용 사이클 1회 실행
     private static BenchmarkIteration runAuthBenchmarkIteration(BenchmarkContext context) throws SQLException {
         PamAuthHandler.consumeLastHttpFlowMetrics();
         SecureDbSession.consumeLastIoMetrics();
 
+        // handleHttpPost() 전체 플로우(요청 바디 읽기/파싱/인증) 측정한다.
         String requestBody = buildFormRequestBody(context.username(), context.password());
         BenchmarkHttpExchange exchange = new BenchmarkHttpExchange(requestBody);
         String result;
         try {
+            // HTTP 핸들러 진입점부터 PASS/FAIL 반환까지 1회 실행
             result = context.handler().handleHttpPost(exchange);
         } finally {
+            // 매 iteration마다 exchange 리소스를 정리
             exchange.close();
         }
 
+        // handleHttpPost() 내부에서 수집한 구간별 메트릭(total/read/parse/auth)을 회수
         PamAuthHandler.HttpFlowMetrics flowMetrics = PamAuthHandler.consumeLastHttpFlowMetrics();
         if (flowMetrics == null) {
             throw new ReplayShieldException(
@@ -314,6 +319,7 @@ public final class BenchmarkUtils {
                     "Benchmark failed to capture request/read/parse timings.");
         }
 
+        // SecureDbSession이 기록한 복호화/재암호화 시간 메트릭을 회수
         SecureDbSession.SessionIoMetrics ioMetrics = SecureDbSession.consumeLastIoMetrics();
         if (ioMetrics == null) {
             throw new ReplayShieldException(
@@ -321,6 +327,7 @@ public final class BenchmarkUtils {
                     "Benchmark failed to capture decrypt/encrypt timings.");
         }
 
+        // HTTP 전체 처리 시간(요청 진입 ~ 최종 결과 반환)
         long totalNanos = flowMetrics.totalNanos();
         long requestReadNanos = flowMetrics.readBodyNanos();
         long formParseNanos = flowMetrics.parseFormNanos();
@@ -328,10 +335,13 @@ public final class BenchmarkUtils {
         long decryptNanos = ioMetrics.decryptNanos();
         long encryptNanos = ioMetrics.encryptNanos();
         long authLogicNanos = authTotalNanos - decryptNanos - encryptNanos;
+
+        // 시계 오차/측정 분해 오차로 음수가 나올 수 있어 0으로 보정
         if (authLogicNanos < 0) {
             authLogicNanos = 0L;
         }
 
+        // iteration 1회의 측정 결과를 불변 record로 반환
         return new BenchmarkIteration(
                 totalNanos,
                 requestReadNanos,
