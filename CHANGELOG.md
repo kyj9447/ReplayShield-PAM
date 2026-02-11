@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.3.1] - 2026-02-11
+
+### Added
+- `replayshield-login-notify.sh` helper script for login-time service-status banner checks.
+
+### Changed
+- `replayshield.service` now includes `[Install]` metadata (`WantedBy=multi-user.target`) for normal `systemctl enable` behavior.
+- Debian maintainer scripts now guard systemd commands in non-systemd environments.
+- Packaging script layout was reorganized (`packaging/package-scripts/`) to separate build tooling from package payload scripts.
+- PAM hook documentation and examples now consistently use `/usr/lib/replayshield/*` paths.
+- Project version updated to `0.3.1`.
+
 ## [0.3.0] - 2026-02-10
 
 ### Added
