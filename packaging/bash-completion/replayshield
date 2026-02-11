@@ -7,7 +7,7 @@ _replayshield_complete() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     if [[ $COMP_CWORD -eq 1 ]]; then
-        COMPREPLY=( $(compgen -W "init manage password serve help --help" -- "$cur") )
+        COMPREPLY=( $(compgen -W "init manage serve password benchmark help --help" -- "$cur") )
     fi
     return 0
 }

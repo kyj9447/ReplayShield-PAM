@@ -7,3 +7,4 @@ build
 .gradle-home/
 .gradle-local/
 release/
+auto-install.sh
