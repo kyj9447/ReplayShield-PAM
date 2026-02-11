@@ -36,7 +36,7 @@ public final class BenchmarkUtils {
 
     private static final int DEFAULT_BENCH_WARMUP = 5;
     private static final int DEFAULT_BENCH_ITERATIONS = 500;
-    private static final int TEST_BENCH_USER_COUNT = 10;
+    private static final int TEST_BENCH_USER_COUNT = 1;
     private static final int TEST_BENCH_PASSWORD_POOL_SIZE = 100;
     private static final int BENCHMARK_TARGET_USER_INDEX = 0;
     private static final int BENCHMARK_TARGET_PASSWORD_INDEX = 0;
@@ -45,13 +45,13 @@ public final class BenchmarkUtils {
     private BenchmarkUtils() {
     }
 
-    private record BenchmarkOptions(int warmup, int iterations) {
+    public record BenchmarkOptions(int warmup, int iterations) {
     }
 
-    private record BenchmarkContext(PamAuthHandler handler, String username, String password, Path tempEncFile) {
+    public record BenchmarkContext(PamAuthHandler handler, String username, String password, Path tempEncFile) {
     }
 
-    private record BenchmarkIteration(
+    public record BenchmarkIteration(
             long totalNanos,
             long requestReadNanos,
             long formParseNanos,
@@ -62,7 +62,7 @@ public final class BenchmarkUtils {
             String result) {
     }
 
-    private record BenchmarkSummary(
+    public record BenchmarkSummary(
             long minNanos,
             long p50Nanos,
             long p95Nanos,
@@ -73,101 +73,8 @@ public final class BenchmarkUtils {
             double throughputOpsPerSec) {
     }
 
-    public static void runBenchmarkMode(String[] args) throws IOException, SQLException, NoSuchAlgorithmException {
-        if (containsArg(args, "--help") || containsArg(args, "-h")) {
-            System.out.println("""
-                    Usage: replayshield benchmark [options]
-                      --warmup=<N>           Warmup iterations (default: 5)
-                      --iterations=<N>       Measured iterations (default: 500)
-                    """);
-            return;
-        }
 
-        BenchmarkOptions options = parseBenchmarkOptions(args);
-        consoleClear("[ Benchmark ]");
-        System.out.println("mode       : test-db");
-        System.out.println("warmup     : " + options.warmup());
-        System.out.println("iterations : " + options.iterations());
-        System.out.println("admin auth : not required (internal benchmark key)");
-        System.out.println("scope      : handleHttpPost end-to-end (request -> PASS/FAIL)");
-        System.out.println();
-
-        byte[] key = createBenchmarkKey();
-        BenchmarkContext context = null;
-        try {
-            context = prepareBenchmarkContext(key);
-            System.out.println("target user: " + context.username());
-            System.out.println("test login : " + context.username() + " / " + context.password());
-            System.out.println("test db    : " + context.tempEncFile());
-            System.out.println();
-
-            for (int i = 0; i < options.warmup(); i++) {
-                runAuthBenchmarkIteration(context);
-            }
-
-            long[] totalSamples = new long[options.iterations()];
-            long[] requestReadSamples = new long[options.iterations()];
-            long[] formParseSamples = new long[options.iterations()];
-            long[] authTotalSamples = new long[options.iterations()];
-            long[] decryptSamples = new long[options.iterations()];
-            long[] authLogicSamples = new long[options.iterations()];
-            long[] encryptSamples = new long[options.iterations()];
-            int passCount = 0;
-            int failCount = 0;
-            int otherCount = 0;
-
-            for (int i = 0; i < options.iterations(); i++) {
-                BenchmarkIteration iter = runAuthBenchmarkIteration(context);
-                totalSamples[i] = iter.totalNanos();
-                requestReadSamples[i] = iter.requestReadNanos();
-                formParseSamples[i] = iter.formParseNanos();
-                authTotalSamples[i] = iter.authTotalNanos();
-                decryptSamples[i] = iter.decryptNanos();
-                authLogicSamples[i] = iter.authLogicNanos();
-                encryptSamples[i] = iter.encryptNanos();
-
-                if ("PASS".equals(iter.result())) {
-                    passCount++;
-                } else if ("FAIL".equals(iter.result())) {
-                    failCount++;
-                } else {
-                    otherCount++;
-                }
-            }
-
-            BenchmarkSummary totalSummary = summarizeBenchmark(totalSamples);
-            BenchmarkSummary requestReadSummary = summarizeBenchmark(requestReadSamples);
-            BenchmarkSummary formParseSummary = summarizeBenchmark(formParseSamples);
-            BenchmarkSummary authTotalSummary = summarizeBenchmark(authTotalSamples);
-            BenchmarkSummary decryptSummary = summarizeBenchmark(decryptSamples);
-            BenchmarkSummary authSummary = summarizeBenchmark(authLogicSamples);
-            BenchmarkSummary encryptSummary = summarizeBenchmark(encryptSamples);
-
-            System.out.println("Benchmark complete.");
-            System.out.printf("result     : PASS=%d FAIL=%d OTHER=%d%n", passCount, failCount, otherCount);
-            System.out.println();
-            printBenchmarkSummary("end-to-end", totalSummary);
-            printBenchmarkSummary("request-read", requestReadSummary);
-            printBenchmarkSummary("form-parse", formParseSummary);
-            printBenchmarkSummary("auth-total", authTotalSummary);
-            printBenchmarkSummary("decrypt", decryptSummary);
-            printBenchmarkSummary("auth-logic", authSummary);
-            printBenchmarkSummary("encrypt", encryptSummary);
-        } finally {
-            if (context != null && context.tempEncFile() != null) {
-                Path tempEncFile = context.tempEncFile();
-                boolean deleted = deleteQuietly(tempEncFile);
-                if (deleted) {
-                    System.out.println("cleanup    : deleted " + tempEncFile);
-                } else {
-                    System.out.println("cleanup    : no file deleted " + tempEncFile);
-                }
-            }
-            Arrays.fill(key, (byte) 0);
-        }
-    }
-
-    private static BenchmarkOptions parseBenchmarkOptions(String[] args) {
+    public static BenchmarkOptions parseBenchmarkOptions(String[] args) {
         int warmup = DEFAULT_BENCH_WARMUP;
         int iterations = DEFAULT_BENCH_ITERATIONS;
 
@@ -217,7 +124,7 @@ public final class BenchmarkUtils {
         return parsed;
     }
 
-    private static BenchmarkContext prepareBenchmarkContext(byte[] key)
+    public static BenchmarkContext prepareBenchmarkContext(byte[] key)
             throws IOException, SQLException, NoSuchAlgorithmException {
         Path memoryDir = PathResolver.getMemoryDbDir().toPath();
         if (!Files.exists(memoryDir)) {
@@ -289,13 +196,13 @@ public final class BenchmarkUtils {
         return "bench_password_" + userIndex + "_" + passwordIndex;
     }
 
-    private static byte[] createBenchmarkKey() throws NoSuchAlgorithmException {
+    public static byte[] createBenchmarkKey() throws NoSuchAlgorithmException {
         MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
         return sha256.digest(BENCHMARK_INTERNAL_KEY_SEED.getBytes(StandardCharsets.UTF_8));
     }
 
     // 벤치마크용 사이클 1회 실행
-    private static BenchmarkIteration runAuthBenchmarkIteration(BenchmarkContext context) throws SQLException {
+    public static BenchmarkIteration runAuthBenchmarkIteration(BenchmarkContext context) throws SQLException {
         PamAuthHandler.consumeLastHttpFlowMetrics();
         SecureDbSession.consumeLastIoMetrics();
 
@@ -359,7 +266,7 @@ public final class BenchmarkUtils {
         return "username=" + encodedUsername + "&password=" + encodedPassword;
     }
 
-    private static void printBenchmarkSummary(String label, BenchmarkSummary summary) {
+    public static void printBenchmarkSummary(String label, BenchmarkSummary summary) {
         System.out.println("[" + label + "]");
         System.out.printf("  total      : %.3f ms%n", nanosToMillis(summary.totalNanos()));
         System.out.printf("  avg        : %.3f ms%n", nanosToMillis(summary.avgNanos()));
@@ -372,7 +279,7 @@ public final class BenchmarkUtils {
         System.out.println();
     }
 
-    private static BenchmarkSummary summarizeBenchmark(long[] samplesNanos) {
+    public static BenchmarkSummary summarizeBenchmark(long[] samplesNanos) {
         long[] sorted = Arrays.copyOf(samplesNanos, samplesNanos.length);
         Arrays.sort(sorted);
 
@@ -416,7 +323,7 @@ public final class BenchmarkUtils {
         return nanos / 1_000_000.0;
     }
 
-    private static boolean containsArg(String[] args, String target) {
+    public static boolean containsArg(String[] args, String target) {
         for (String arg : args) {
             if (target.equals(arg)) {
                 return true;
@@ -439,7 +346,7 @@ public final class BenchmarkUtils {
         return first + "*****" + last;
     }
 
-    private static boolean deleteQuietly(Path target) {
+    public static boolean deleteQuietly(Path target) {
         try {
             return Files.deleteIfExists(target);
         } catch (IOException ignored) {

@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -19,6 +20,7 @@ import java.util.Map;
 import com.sun.net.httpserver.HttpExchange;
 
 import dev.replayshield.db.SecureDbSession;
+import dev.replayshield.util.PathResolver;
 import dev.replayshield.util.ReplayShieldException;
 import dev.replayshield.util.ReplayShieldException.ErrorType;
 
@@ -120,9 +122,21 @@ public class PamAuthHandler {
 
     // PASS/FAIL
     public String authenticate(String username, String password) throws SQLException {
-        try (SecureDbSession.DbSession session = encFileOverride == null
-                ? SecureDbSession.openWritable(key)
-                : SecureDbSession.openWritable(key, encFileOverride)) {
+        Path targetEncFile;
+        if (encFileOverride != null) {
+            targetEncFile = encFileOverride;
+        } else {
+            try {
+                targetEncFile = PathResolver.getUserEncryptedDbFile(username).toPath();
+            } catch (ReplayShieldException exception) {
+                return "FAIL";
+            }
+            if (!Files.exists(targetEncFile)) {
+                return "FAIL";
+            }
+        }
+
+        try (SecureDbSession.DbSession session = SecureDbSession.openWritable(key, targetEncFile)) {
             return doAuth(session.connection(), username, password);
         }
     }

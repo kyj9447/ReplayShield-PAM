@@ -8,22 +8,24 @@ ReplayShield is a lightweight HTTP authentication service that rejects recently 
 
 - CLI workflow via `replayshield init/manage/password/serve/benchmark`:
   - **init** – Initialization  
-    Prompts for an admin password and creates an encrypted database with that key. Re-running overwrites the existing DB (re-initialization).
+    Prompts for an admin password, writes salt/admin marker, and initializes the encrypted per-user DB directory. Re-running resets all stored users (re-initialization).
   - **manage** – Manage users/password pools  
     - *Add new user*: create a user and register initial passwords.  
     - *Manage user*: add/delete passwords, adjust block counts per user.  
     - *Delete user*: remove a user entirely.  
     - *Change admin password*: rotate the admin key.  
-    - *DB dump*: print the current database (users/password history) to the console.
+    - *DB dump*: print all user DB snapshots (config/pool/history) to the console.
   - **password** – Cache the admin key  
     Stores the admin credential in tmpfs so `replayshield serve` can start in a headless environment.
   - **serve** – Run the authentication server  
     Uses the cached admin key to launch the HTTP server.
   - **benchmark** – Run DB benchmark  
-    Measures auth flow latency on an isolated temporary benchmark DB with per-iteration decrypt/encrypt timings (`--warmup`, `--iterations`).
+    Measures auth flow latency on an isolated temporary benchmark DB (1 user, 100 passwords) with per-iteration decrypt/encrypt timings (`--warmup`, `--iterations`).
+    Default measured iterations are 500 against the same target user.
     No admin password prompt is required; CLI prints the default benchmark login (`bench_user_0` / `bench_password_0_0`).
 
-- Encrypted SQLite DB: data is always encrypted on disk and decrypted only inside `/dev/shm`.
+- Encrypted SQLite DB: each user has a dedicated encrypted DB file under `/var/lib/replayshield/users/*.db.enc`; data is decrypted only inside `/dev/shm`.
+- This per-user split removes the single-DB scaling bottleneck where auth workload grew linearly with total user count.
 - `/auth` HTTP POST endpoint returns `PASS`/`FAIL`, and the PAM helper consumes this result to decide login flow.
 - PAM helper script (`/usr/lib/replayshield/replayshield-pam.sh`) integrates with `pam_exec.so expose_authtok`.
 
@@ -71,7 +73,7 @@ sudo dpkg -i replayshield_*.deb
 
 1. **Initialization & management**
    ```bash
-   sudo replayshield init      # creates salt and encrypted DB; running again resets everything
+   sudo replayshield init      # creates salt/marker and encrypted per-user DB storage; running again resets everything
    sudo replayshield manage    # manage users/password pools, adjust block_count, run DB dumps, etc.
    ```
 

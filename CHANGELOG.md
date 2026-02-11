@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.0] - 2026-02-11
+
+### Changed
+- Authentication storage layout moved from a single encrypted DB to per-user encrypted DB files under `/var/lib/replayshield/users/*.db.enc`.
+- Authentication flow now opens only the target user's encrypted DB file, reducing user-count-proportional overhead from scanning a shared DB.
+- `manage` CLI operations were updated to use per-user DB files (create/manage/delete/dump).
+- Admin key verification now uses an admin marker file (`/var/lib/replayshield/admin.marker`) and supports one-time migration from legacy `/var/lib/replayshield/secure.db.enc`.
+- Benchmark dataset now targets a single user with 100 passwords and runs 500 measured iterations by default.
+- Project version updated to `0.4.0`.
+
 ## [0.3.1] - 2026-02-11
 
 ### Added

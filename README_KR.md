@@ -11,7 +11,7 @@ ReplayShield는 PAM(예: SSH) 인증 과정에서 최근에 사용된 암호를 
 
 - `replayshield init/manage/password/serve/benchmark` CLI로 아래 기능 제공
   - `init` : 초기화
-    - 실행시 프롬프트로 Admin 암호를 입력하면 해당 암호로 암호화된 DB 파일 생성. 재실행시 해당 과정 다시 진행하고 DB파일 덮어씌워 초기화.
+    - 실행 시 Admin 암호를 입력하면 salt/admin marker를 기록하고 사용자별 암호화 DB 저장소를 초기화. 재실행 시 전체 사용자 데이터 초기화.
   - `manage` : 사용자/암호 풀 관리
     - `Add new user` : 새 사용자, 비밀번호 추가
     - `Manage user` : 특정 사용자 관리
@@ -23,10 +23,12 @@ ReplayShield는 PAM(예: SSH) 인증 과정에서 최근에 사용된 암호를 
   - `serve` : 인증 서버 실행
     - `replayshield serve`에서 저장한 캐싱된 Admin 암호를 사용해 인증 서버 실행
   - `benchmark` : DB 성능 벤치마크
-    - 격리된 임시 벤치마크 DB에서 인증 플로우를 측정하고 반복별 복호화/암호화 시간을 분리 기록 (`--warmup`, `--iterations`)
+    - 격리된 임시 벤치마크 DB(1명 사용자, 100개 비밀번호)에서 인증 플로우를 측정하고 반복별 복호화/암호화 시간을 분리 기록 (`--warmup`, `--iterations`)
+    - 기본 측정 반복 횟수는 500회이며 동일 사용자 기준으로 반복 측정
     - Admin 암호 입력이 필요 없으며, 기본 테스트 로그인(`bench_user_0` / `bench_password_0_0`)을 CLI에 표시
 
-- 암호화된 SQLite DB: 디스크에는 항상 암호화된 상태로 저장되고 `/dev/shm` tmpfs에서만 복호화.
+- 암호화된 SQLite DB: `/var/lib/replayshield/users/*.db.enc`에 사용자별 파일로 저장되며 `/dev/shm` tmpfs에서만 복호화.
+- 사용자 수 증가 시 단일 DB 스캔으로 연산 부하가 정비례로 증가하던 병목을 사용자별 분리로 완화.
 - `/auth` HTTP POST 엔드포인트가 `PASS`/`FAIL`을 반환하여 PAM 스크립트가 인증 결과로 활용.
 - `pam_exec.so expose_authtok`와 연동되는 PAM 스크립트 제공(`/usr/lib/replayshield/replayshield-pam.sh`)
 
@@ -70,7 +72,7 @@ sudo dpkg -i replayshield_*.deb
 
 1. **초기화 & 관리**
    ```bash
-   sudo replayshield init      # salt와 암호화 DB 생성 (재실행 시 전체 초기화)
+   sudo replayshield init      # salt/marker + 사용자별 암호화 DB 저장소 생성 (재실행 시 전체 초기화)
    sudo replayshield manage    # 사용자/암호 풀 관리, block_count 조정 등 진행
    ```
 2. **관리자 암호 캐시**
@@ -93,7 +95,7 @@ sudo dpkg -i replayshield_*.deb
 - **메모리 파일시스템 필수**: `/dev/shm` 이 반드시 tmpfs(메모리 기반)여야 하고 쓰기 가능해야 합니다.
 - **root 권한 필수**: `replayshield` 모든 명령은 root(`sudo`)로 실행해야 합니다.
 - **TTY(대화형 콘솔) 필요 명령**: `init`, `manage`, `password`는 콘솔 입력이 필요하므로 비대화형 환경에서 실행할 수 없습니다.
-- **고정 경로 사용**: salt/암호화 DB/cache 파일 경로는 각각 `/etc/replayshield/salt.bin`, `/var/lib/replayshield/secure.db.enc`, `/dev/shm/replayshield/admin.key`로 고정되어 있습니다.
+- **고정 경로 사용**: salt/marker/사용자DB/cache 경로는 각각 `/etc/replayshield/salt.bin`, `/var/lib/replayshield/admin.marker`, `/var/lib/replayshield/users/*.db.enc`, `/dev/shm/replayshield/admin.key`로 고정되어 있습니다.
 - **로컬 루프백 바인딩**: 인증 서버는 `127.0.0.1:4444`에만 바인딩됩니다.
 - **PAM/도구 의존성**: `pam_exec.so expose_authtok` 기반 PAM 설정과 `curl`이 필요합니다.
 - **서비스 시작 전제**: `serve` 실행 전 `replayshield password`로 admin key를 캐시해야 하며, 정상 시작 시 캐시 키는 삭제됩니다(재시작/재부팅 시 재캐시 필요).

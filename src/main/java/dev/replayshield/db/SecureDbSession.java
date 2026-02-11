@@ -6,8 +6,8 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
 
-import dev.replayshield.Main;
 import dev.replayshield.security.EncryptDecrypt;
+import dev.replayshield.util.IoUtils;
 import dev.replayshield.util.PathResolver;
 import dev.replayshield.util.ReplayShieldException;
 import dev.replayshield.util.ReplayShieldException.ErrorType;
@@ -28,10 +28,6 @@ public final class SecureDbSession {
         return metrics;
     }
 
-    public static DbSession openReadOnly(byte[] key) {
-        return openReadOnly(key, PathResolver.getEncryptedDbFile().toPath());
-    }
-
     public static DbSession openReadOnly(byte[] key, Path encFile) {
         if (!Files.exists(encFile)) {
             throw new ReplayShieldException(ErrorType.INITIALIZATION, "Encrypted DB not found. Run init first.");
@@ -46,17 +42,13 @@ public final class SecureDbSession {
             Connection conn = Db.open(tmp);
             return new DbSession(key, encFile, tmp, conn, false, decryptNanos);
         } catch (ReplayShieldException exception) {
-            Main.deleteQuietly(tmp);
+            IoUtils.deleteQuietly(tmp);
             throw exception;
         } catch (Exception exception) {
-            Main.deleteQuietly(tmp);
+            IoUtils.deleteQuietly(tmp);
             throw new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to open read-only DB session",
                     exception);
         }
-    }
-
-    public static DbSession openWritable(byte[] key) {
-        return openWritable(key, PathResolver.getEncryptedDbFile().toPath());
     }
 
     public static DbSession openWritable(byte[] key, Path encFile) {
@@ -72,10 +64,10 @@ public final class SecureDbSession {
             Connection conn = Db.open(tmp);
             return new DbSession(key, encFile, tmp, conn, true, decryptNanos);
         } catch (ReplayShieldException exception) {
-            Main.deleteQuietly(tmp);
+            IoUtils.deleteQuietly(tmp);
             throw exception;
         } catch (Exception exception) {
-            Main.deleteQuietly(tmp);
+            IoUtils.deleteQuietly(tmp);
             throw new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to open writable DB session", exception);
         }
     }
