@@ -23,9 +23,12 @@ ReplayShield는 PAM(예: SSH) 인증 과정에서 최근에 사용된 암호를 
   - `serve` : 인증 서버 실행
     - `replayshield serve`에서 저장한 캐싱된 Admin 암호를 사용해 인증 서버 실행
   - `benchmark` : DB 성능 벤치마크
-    - 격리된 임시 벤치마크 DB(1명 사용자, 100개 비밀번호)에서 인증 플로우를 측정하고 반복별 복호화/암호화 시간을 분리 기록 (`--warmup`, `--iterations`)
-    - 기본 측정 반복 횟수는 500회이며 동일 사용자 기준으로 반복 측정
-    - Admin 암호 입력이 필요 없으며, 기본 테스트 로그인(`bench_user_0` / `bench_password_0_0`)을 CLI에 표시
+    - 격리된 임시 벤치마크 DB 파일에서 `single-db`와 `per-user-db`를 연속 실행해 비교
+    - 두 모드 모두 사용자당 100개 암호 풀을 고정으로 사용
+    - 트래픽은 `--target-rps`, `--measure-seconds`로 고정하고 실행 순서는 교차(single-first, then per-first)
+    - 사용자 수 스윕은 `--users-list`(기본 `1,10,100`) 또는 단일 시나리오 `--users=<N>`으로 설정
+    - `per-user-db`는 디렉터리 스캔 기반 사용자 DB 조회 비용을 포함하며, 출력의 `lookup` 지표로 확인 가능
+    - Admin 암호 입력이 필요 없으며, 기본 테스트 로그인(`bench_u0` / `bench_u0_pw0_Aa1!`)을 CLI에 표시
 
 - 암호화된 SQLite DB: `/var/lib/replayshield/users/*.db.enc`에 사용자별 파일로 저장되며 `/dev/shm` tmpfs에서만 복호화.
 - 사용자 수 증가 시 단일 DB 스캔으로 연산 부하가 정비례로 증가하던 병목을 사용자별 분리로 완화.
@@ -86,6 +89,12 @@ sudo dpkg -i replayshield_*.deb
 
 4. **PAM 동작 확인**
    - SSH 접속을 시도하면 PAM 스크립트가 `http://127.0.0.1:4444/auth` 에 사용자명/암호를 전달하고, 응답이 `PASS`일 때만 인증을 계속 진행합니다.
+
+5. **벤치마크 비교 실행**
+   ```bash
+   sudo replayshield benchmark --warmup-seconds=5 --measure-seconds=30 --target-rps=100 --users-list=1,10,100
+   ```
+   각 사용자 수 시나리오에서 동일 트래픽 조건으로 `single-db`/`per-user-db`를 비교하고 스케일링 요약을 출력합니다.
 
 ## 4. 제한사항 및 전제 조건
 

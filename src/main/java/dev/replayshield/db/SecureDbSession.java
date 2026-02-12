@@ -14,7 +14,9 @@ import dev.replayshield.util.ReplayShieldException.ErrorType;
 
 public final class SecureDbSession {
 
-    public record SessionIoMetrics(long decryptNanos, long encryptNanos) {
+    public record SessionIoMetrics(
+            long decryptNanos,
+            long encryptNanos) {
     }
 
     private static final ThreadLocal<SessionIoMetrics> LAST_IO_METRICS = new ThreadLocal<>();

@@ -20,9 +20,11 @@ ReplayShield is a lightweight HTTP authentication service that rejects recently 
   - **serve** – Run the authentication server  
     Uses the cached admin key to launch the HTTP server.
   - **benchmark** – Run DB benchmark  
-    Measures auth flow latency on an isolated temporary benchmark DB (1 user, 100 passwords) with per-iteration decrypt/encrypt timings (`--warmup`, `--iterations`).
-    Default measured iterations are 500 against the same target user.
-    No admin password prompt is required; CLI prints the default benchmark login (`bench_user_0` / `bench_password_0_0`).
+    Runs side-by-side comparison of `single-db` and `per-user-db` modes on isolated temporary benchmark DB files.
+    Each mode uses the same password-pool size (100 per user), fixed traffic profile (`--target-rps`, `--measure-seconds`), and alternating execution order.
+    User-scale sweep is configurable via `--users-list` (default `1,10,100`) or `--users=<N>` for a single scenario.
+    Per-user mode also includes directory-scan lookup cost, reported as `lookup` in the benchmark output.
+    No admin password prompt is required; CLI prints the default benchmark login (`bench_u0` / `bench_u0_pw0_Aa1!`).
 
 - Encrypted SQLite DB: each user has a dedicated encrypted DB file under `/var/lib/replayshield/users/*.db.enc`; data is decrypted only inside `/dev/shm`.
 - This per-user split removes the single-DB scaling bottleneck where auth workload grew linearly with total user count.
@@ -91,6 +93,12 @@ sudo dpkg -i replayshield_*.deb
 
 4. **Verify PAM flow**  
    Try an SSH login. The PAM script posts the username/password to `http://127.0.0.1:4444/auth` and only continues if it receives `PASS`.
+
+5. **Run benchmark comparison**
+   ```bash
+   sudo replayshield benchmark --warmup-seconds=5 --measure-seconds=30 --target-rps=100 --users-list=1,10,100
+   ```
+   This runs `single-db`/`per-user-db` under identical traffic for each user-count scenario and prints scaling comparisons.
 
 ## License
 

@@ -10,9 +10,12 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-public class PathResolver {
+public final class PathResolver {
     private static final String USER_DB_SUFFIX = ".db.enc";
     private static final String USERNAME_PATH_PATTERN = "^[A-Za-z0-9._-]+$";
+
+    private PathResolver() {
+    }
 
     public static File getSaltFile() {
         return new File("/etc/replayshield/salt.bin");
@@ -46,10 +49,6 @@ public class PathResolver {
 
     public static boolean userEncryptedDbExistsInInactive(String username) {
         return getInactiveUserEncryptedDbFile(username).exists();
-    }
-
-    public static boolean userEncryptedDbExistsAnyState(String username) {
-        return userEncryptedDbExists(username) || userEncryptedDbExistsInInactive(username);
     }
 
     public static boolean hasAnyUserEncryptedDb() {
@@ -271,9 +270,15 @@ public class PathResolver {
 
         // 2. 해당 마운트가 실제로 tmpfs(메모리 기반 임시파티션)인지 확인
         try {
-            boolean isTmpfs = Files.readString(Path.of("/proc/mounts"))
-                    .lines()
-                    .anyMatch(line -> line.contains(" /dev/shm ") && line.contains("tmpfs"));
+            String mounts = Files.readString(Path.of("/proc/mounts"));
+            boolean isTmpfs = false;
+            String[] mountLines = mounts.split("\n");
+            for (String line : mountLines) {
+                if (line.contains(" /dev/shm ") && line.contains("tmpfs")) {
+                    isTmpfs = true;
+                    break;
+                }
+            }
             if (!isTmpfs) {
                 throw new ReplayShieldException(ReplayShieldException.ErrorType.SYSTEM_ENVIRONMENT,
                         "ERROR: /dev/shm is NOT tmpfs (memory). ReplayShield cannot run on disk-backed /dev/shm.");

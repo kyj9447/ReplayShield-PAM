@@ -39,51 +39,51 @@ public class Main {
             manage : administrator CLI
             serve : Start HTTP auth server
             password : Cache admin password in RAM for headless serve
-            benchmark : measure auth flow (isolated benchmark DB)
+            benchmark : compare single-db vs per-user-db auth flow
             """;
 
     // main() 함수: 핵심 처리 로직 실행
     public static void main(String[] args) {
+
+        // critical 오류 로깅 핸들러
         Thread.setDefaultUncaughtExceptionHandler(
                 (thread, throwable) -> ErrorReporter.logFatal("Thread " + thread.getName(), throwable));
 
-        CliUtils.consoleClear();
-
+        // 루트 권한 확인
         if (!"root".equals(System.getProperty("user.name"))) {
             System.err.println("This command must be run as root (sudo).");
             return;
         }
 
+        // 서버 인스턴스
         HttpAuthServer server = null;
 
         try {
+            // 파일 시스템 및 기본 디렉토리 준비
             PathResolver.ensureMemoryFsAvailable();
             PathResolver.ensureBaseDirs();
 
+            // --help
             if (args.length == 0 || "--help".equals(args[0]) || "help".equals(args[0])) {
                 System.out.println(USAGE);
                 return;
             }
 
+            // 나머지 명령어 처리
             switch (args[0]) {
                 case "init" -> {
-                    if (CONSOLE == null) {
-                        throw new ReplayShieldException(
-                                ReplayShieldException.ErrorType.CONFIGURATION,
-                                "Interactive console required (TTY not detected)");
-                    }
+                    CliUtils.requireInteractiveConsole();
                     runInitMode();
                 }
                 case "manage" -> {
-                    if (CONSOLE == null) {
-                        throw new ReplayShieldException(
-                                ReplayShieldException.ErrorType.CONFIGURATION,
-                                "Interactive console required (TTY not detected)");
-                    }
+                    CliUtils.requireInteractiveConsole();
                     runManageMode();
                 }
                 case "serve" -> {
+                    // 서버 모드 실행
                     server = runServerMode();
+
+                    // 메인 스레드 대기
                     synchronized (server) {
                         try {
                             server.wait();
@@ -94,11 +94,7 @@ public class Main {
                     }
                 }
                 case "password" -> {
-                    if (CONSOLE == null) {
-                        throw new ReplayShieldException(
-                                ReplayShieldException.ErrorType.CONFIGURATION,
-                                "Interactive console required (TTY not detected)");
-                    }
+                    CliUtils.requireInteractiveConsole();
                     cacheAdminPassword();
                 }
                 case "benchmark" -> runBenchmarkMode(args);
@@ -114,6 +110,7 @@ public class Main {
                 | SQLException exception) {
             ErrorReporter.logError("main", exception);
         } finally {
+            // 서버 정리
             if (server != null) {
                 server.stop(1);
             }
@@ -125,11 +122,14 @@ public class Main {
     // INIT 모드
     // ================================
     private static void runInitMode() throws IOException {
+
+        // 기존 데이터 확인
         boolean saltExists = KeyLoader.saltExists();
         boolean userDbExists = PathResolver.hasAnyUserEncryptedDb();
         boolean markerExists = PathResolver.getAdminMarkerFile().exists();
-        boolean legacyDbExists = Files.exists(Path.of("/var/lib/replayshield/secure.db.enc"));
-        if (saltExists || userDbExists || markerExists || legacyDbExists) {
+
+        // 경고 및 재초기화
+        if (saltExists || userDbExists || markerExists) {
             System.out.println("""
                     ██╗    ██╗  █████╗ ██████╗ ███╗   ██╗███╗   ██╗██╗███╗   ██╗ ██████╗
                     ██║    ██║ ██╔══██╗██╔══██╗████╗  ██║████╗  ██║██║████╗  ██║██╔════╝
@@ -144,22 +144,23 @@ public class Main {
             System.out.println("- /var/lib/replayshield/users/*.db.enc");
             System.out.println("- /var/lib/replayshield/users/inactive/*.db.enc");
             System.out.println("- /var/lib/replayshield/admin.marker");
-            System.out.println("- /var/lib/replayshield/secure.db.enc (legacy)");
             System.out.println("All user data and PW pools will be permanently lost.");
             System.out.print("Are you sure you want to reinitialize? (yes/no): ");
 
+            // 초기화 사용자 확인
             String answer = CONSOLE.readLine().toLowerCase();
             if (!"yes".equals(answer)) {
                 System.out.println("Initialization aborted.");
                 return;
             }
 
+            // 기존 파일 삭제
             Files.deleteIfExists(PathResolver.getSaltFile().toPath());
             PathResolver.deleteAllUserEncryptedDbs();
             PathResolver.deleteAdminMarkerIfExists();
-            Files.deleteIfExists(Path.of("/var/lib/replayshield/secure.db.enc"));
         }
 
+        // 초기화 수행
         if (KeyLoader.initializeAdminPassword()) {
             System.out.println("Initialization complete.");
             System.out.println("Run 'replayshield serve' to start the server.");
@@ -173,10 +174,13 @@ public class Main {
     // MANAGE 모드 (관리자 CLI)
     // ================================
     private static void runManageMode() throws SQLException, ReplayShieldException, NoSuchAlgorithmException {
+
+        // Admin 키 입력받아서 메모리에 로드
         byte[] key = KeyLoader.verifyAdminPassword();
         AdminKeyHolder.setKey(key);
-        CliUtils.consoleClear();
 
+        // 관리 메뉴 (루프)
+        CliUtils.consoleClear(null);
         boolean running = true;
         while (running) {
             String prompt = """
@@ -194,7 +198,7 @@ public class Main {
                 case 3 -> ManageTask.manageDeleteUser(key);
                 case 4 -> ManageTask.manageChangeAdminPassword(key);
                 case 9 -> manageDebugDbDumpInternal(key);
-                case 0 -> running = false;
+                case 0 -> running = false; // 종료
                 default -> System.out.println("Unknown menu.");
             }
         }
@@ -202,10 +206,75 @@ public class Main {
     }
 
     // ================================
+    // SERVER 모드
+    // ================================
+    private static HttpAuthServer runServerMode() throws IOException {
+
+        // 서버 사용자와 DB 파일 이름 불일치 정리
+        ServerTask.moveUnknownUserDbsToInactive();
+
+        // Admin 키 캐시에서 읽기
+        byte[] key = ServerTask.tryConsumeCachedAdminKey();
+        if (key == null) {
+            throw new ReplayShieldException(
+                    ReplayShieldException.ErrorType.CONFIGURATION,
+                    "No cached admin password found. Run 'replayshield password' before starting the server.");
+        }
+
+        // 서버 시작
+        AdminKeyHolder.setKey(key);
+        int port = HttpAuthServer.DEFAULT_PORT;
+        HttpAuthServer server = new HttpAuthServer(port, key);
+        server.start();
+        System.out.println("ReplayShield server running on port " + port);
+        System.out.println("Use Ctrl+C to stop.");
+        return server;
+    }
+
+    // ================================
+    // PASSWORD 모드
+    // ================================
+    private static void cacheAdminPassword() {
+
+        // 현재 Admin 키 확인
+        CliUtils.consoleClear("[ Cache Admin Password ]");
+        byte[] key = KeyLoader.verifyAdminPassword();
+        Path cachePath = PathResolver.getAdminKeyCacheFile().toPath();
+
+        try {
+            Path parent = cachePath.getParent();
+            if (parent != null && !Files.exists(parent)) {
+                Files.createDirectories(parent);
+            }
+            Files.write(cachePath, key);
+            try {
+                Files.setPosixFilePermissions(cachePath, PosixFilePermissions.fromString("rw-------"));
+            } catch (UnsupportedOperationException ignored) {
+            }
+            System.out.println("Admin password cached in RAM: " + cachePath);
+            System.out.println("Run 'sudo systemctl start replayshield' before the next reboot to reuse it.");
+        } catch (IOException exception) {
+            throw new ReplayShieldException(
+                    ReplayShieldException.ErrorType.SYSTEM_ENVIRONMENT,
+                    "Failed to cache admin password.",
+                    exception);
+        } finally {
+            Arrays.fill(key, (byte) 0);
+        }
+    }
+
+    // ================================
+    // BENCHMARK 모드
+    // ================================
+    private static void runBenchmarkMode(String[] args) throws IOException, SQLException, NoSuchAlgorithmException {
+        BenchmarkUtils.runBenchmarkMode(args);
+    }
+
+    // ================================
     // DEBUG DB (테스트용)
     // ================================
     private static void manageDebugDbDumpInternal(byte[] key) throws SQLException, ReplayShieldException {
-        CliUtils.consoleClear();
+        CliUtils.consoleClear(null);
         List<String> usernames = PathResolver.listUserEncryptedDbUsernames();
         if (usernames.isEmpty()) {
             System.out.println("No users found.");
@@ -308,152 +377,5 @@ public class Main {
         }
 
         System.out.println("=== END OF DEBUG DUMP ===");
-    }
-
-    // ================================
-    // SERVER 모드
-    // ================================
-    private static HttpAuthServer runServerMode() throws IOException {
-        byte[] key = ServerTask.tryConsumeCachedAdminKey();
-        if (key == null) {
-            throw new ReplayShieldException(
-                    ReplayShieldException.ErrorType.CONFIGURATION,
-                    "No cached admin password found. Run 'replayshield password' before starting the server.");
-        }
-        ServerTask.moveUnknownUserDbsToInactive();
-        AdminKeyHolder.setKey(key);
-        int port = 4444;
-        HttpAuthServer server = new HttpAuthServer(port, key);
-        server.start();
-        System.out.println("ReplayShield server running on port " + port);
-        System.out.println("Use Ctrl+C to stop.");
-        return server;
-    }
-
-    // ================================
-    // BENCHMARK 모드
-    // ================================
-    public static void runBenchmarkMode(String[] args) throws IOException, SQLException, NoSuchAlgorithmException {
-        if (BenchmarkUtils.containsArg(args, "--help") || BenchmarkUtils.containsArg(args, "-h")) {
-            System.out.println("""
-                    Usage: replayshield benchmark [options]
-                      --warmup=<N>           Warmup iterations (default: 5)
-                      --iterations=<N>       Measured iterations (default: 500)
-                    """);
-            return;
-        }
-
-        BenchmarkUtils.BenchmarkOptions options = BenchmarkUtils.parseBenchmarkOptions(args);
-        CliUtils.consoleClear("[ Benchmark ]");
-        System.out.println("mode       : test-db");
-        System.out.println("warmup     : " + options.warmup());
-        System.out.println("iterations : " + options.iterations());
-        System.out.println("admin auth : not required (internal benchmark key)");
-        System.out.println("scope      : handleHttpPost end-to-end (request -> PASS/FAIL)");
-        System.out.println("dataset    : 1 user x 100 passwords");
-        System.out.println();
-
-        byte[] key = BenchmarkUtils.createBenchmarkKey();
-        BenchmarkUtils.BenchmarkContext context = null;
-        try {
-            context = BenchmarkUtils.prepareBenchmarkContext(key);
-            System.out.println("target user: " + context.username());
-            System.out.println("test login : " + context.username() + " / " + context.password());
-            System.out.println("test db    : " + context.tempEncFile());
-            System.out.println();
-
-            for (int i = 0; i < options.warmup(); i++) {
-                BenchmarkUtils.runAuthBenchmarkIteration(context);
-            }
-
-            long[] totalSamples = new long[options.iterations()];
-            long[] requestReadSamples = new long[options.iterations()];
-            long[] formParseSamples = new long[options.iterations()];
-            long[] authTotalSamples = new long[options.iterations()];
-            long[] decryptSamples = new long[options.iterations()];
-            long[] authLogicSamples = new long[options.iterations()];
-            long[] encryptSamples = new long[options.iterations()];
-            int passCount = 0;
-            int failCount = 0;
-            int otherCount = 0;
-
-            for (int i = 0; i < options.iterations(); i++) {
-                BenchmarkUtils.BenchmarkIteration iter = BenchmarkUtils.runAuthBenchmarkIteration(context);
-                totalSamples[i] = iter.totalNanos();
-                requestReadSamples[i] = iter.requestReadNanos();
-                formParseSamples[i] = iter.formParseNanos();
-                authTotalSamples[i] = iter.authTotalNanos();
-                decryptSamples[i] = iter.decryptNanos();
-                authLogicSamples[i] = iter.authLogicNanos();
-                encryptSamples[i] = iter.encryptNanos();
-
-                if ("PASS".equals(iter.result())) {
-                    passCount++;
-                } else if ("FAIL".equals(iter.result())) {
-                    failCount++;
-                } else {
-                    otherCount++;
-                }
-            }
-
-            BenchmarkUtils.BenchmarkSummary totalSummary = BenchmarkUtils.summarizeBenchmark(totalSamples);
-            BenchmarkUtils.BenchmarkSummary requestReadSummary = BenchmarkUtils.summarizeBenchmark(requestReadSamples);
-            BenchmarkUtils.BenchmarkSummary formParseSummary = BenchmarkUtils.summarizeBenchmark(formParseSamples);
-            BenchmarkUtils.BenchmarkSummary authTotalSummary = BenchmarkUtils.summarizeBenchmark(authTotalSamples);
-            BenchmarkUtils.BenchmarkSummary decryptSummary = BenchmarkUtils.summarizeBenchmark(decryptSamples);
-            BenchmarkUtils.BenchmarkSummary authSummary = BenchmarkUtils.summarizeBenchmark(authLogicSamples);
-            BenchmarkUtils.BenchmarkSummary encryptSummary = BenchmarkUtils.summarizeBenchmark(encryptSamples);
-
-            System.out.println("Benchmark complete.");
-            System.out.printf("result     : PASS=%d FAIL=%d OTHER=%d%n", passCount, failCount, otherCount);
-            System.out.println();
-            BenchmarkUtils.printBenchmarkSummary("end-to-end", totalSummary);
-            BenchmarkUtils.printBenchmarkSummary("request-read", requestReadSummary);
-            BenchmarkUtils.printBenchmarkSummary("form-parse", formParseSummary);
-            BenchmarkUtils.printBenchmarkSummary("auth-total", authTotalSummary);
-            BenchmarkUtils.printBenchmarkSummary("decrypt", decryptSummary);
-            BenchmarkUtils.printBenchmarkSummary("auth-logic", authSummary);
-            BenchmarkUtils.printBenchmarkSummary("encrypt", encryptSummary);
-        } finally {
-            if (context != null && context.tempEncFile() != null) {
-                Path tempEncFile = context.tempEncFile();
-                boolean deleted = BenchmarkUtils.deleteQuietly(tempEncFile);
-                if (deleted) {
-                    System.out.println("cleanup    : deleted " + tempEncFile);
-                } else {
-                    System.out.println("cleanup    : no file deleted " + tempEncFile);
-                }
-            }
-            Arrays.fill(key, (byte) 0);
-        }
-    }
-
-    // ================================
-    // PASSWORD 모드
-    // ================================
-    private static void cacheAdminPassword() {
-        CliUtils.consoleClear("[ Cache Admin Password ]");
-        byte[] key = KeyLoader.verifyAdminPassword();
-        Path cachePath = PathResolver.getAdminKeyCacheFile().toPath();
-        try {
-            Path parent = cachePath.getParent();
-            if (parent != null && !Files.exists(parent)) {
-                Files.createDirectories(parent);
-            }
-            Files.write(cachePath, key);
-            try {
-                Files.setPosixFilePermissions(cachePath, PosixFilePermissions.fromString("rw-------"));
-            } catch (UnsupportedOperationException ignored) {
-            }
-            System.out.println("Admin password cached in RAM: " + cachePath);
-            System.out.println("Run 'sudo systemctl start replayshield' before the next reboot to reuse it.");
-        } catch (IOException exception) {
-            throw new ReplayShieldException(
-                    ReplayShieldException.ErrorType.SYSTEM_ENVIRONMENT,
-                    "Failed to cache admin password.",
-                    exception);
-        } finally {
-            Arrays.fill(key, (byte) 0);
-        }
     }
 }

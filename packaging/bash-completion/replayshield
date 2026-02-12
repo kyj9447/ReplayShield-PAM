@@ -2,12 +2,90 @@
 
 _replayshield_complete() {
     local cur prev
+    local cmd
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
+    cmd="${COMP_WORDS[1]}"
 
     if [[ $COMP_CWORD -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "init manage serve password benchmark help --help" -- "$cur") )
+        return 0
+    fi
+
+    if [[ "$cmd" == "benchmark" ]]; then
+        if [[ "$cur" == --warmup-seconds=* ]]; then
+            local warmup_values=("0" "3" "5" "10")
+            COMPREPLY=( $(compgen -W "${warmup_values[*]}" -- "${cur#--warmup-seconds=}") )
+            for i in "${!COMPREPLY[@]}"; do
+                COMPREPLY[$i]="--warmup-seconds=${COMPREPLY[$i]}"
+            done
+            return 0
+        fi
+
+        if [[ "$cur" == --measure-seconds=* ]]; then
+            local measure_values=("10" "30" "60")
+            COMPREPLY=( $(compgen -W "${measure_values[*]}" -- "${cur#--measure-seconds=}") )
+            for i in "${!COMPREPLY[@]}"; do
+                COMPREPLY[$i]="--measure-seconds=${COMPREPLY[$i]}"
+            done
+            return 0
+        fi
+
+        if [[ "$cur" == --target-rps=* ]]; then
+            local rps_values=("50" "100" "200" "500")
+            COMPREPLY=( $(compgen -W "${rps_values[*]}" -- "${cur#--target-rps=}") )
+            for i in "${!COMPREPLY[@]}"; do
+                COMPREPLY[$i]="--target-rps=${COMPREPLY[$i]}"
+            done
+            return 0
+        fi
+
+        if [[ "$cur" == --users-list=* ]]; then
+            local users_list_values=("1,10,100" "1,5,10,50,100" "1,10,100,1000")
+            COMPREPLY=( $(compgen -W "${users_list_values[*]}" -- "${cur#--users-list=}") )
+            for i in "${!COMPREPLY[@]}"; do
+                COMPREPLY[$i]="--users-list=${COMPREPLY[$i]}"
+            done
+            return 0
+        fi
+
+        if [[ "$cur" == --users=* ]]; then
+            local user_values=("1" "10" "100" "1000" "5000")
+            COMPREPLY=( $(compgen -W "${user_values[*]}" -- "${cur#--users=}") )
+            for i in "${!COMPREPLY[@]}"; do
+                COMPREPLY[$i]="--users=${COMPREPLY[$i]}"
+            done
+            return 0
+        fi
+
+        if [[ "$cur" == --* ]]; then
+            COMPREPLY=( $(compgen -W "--warmup-seconds= --measure-seconds= --target-rps= --users-list= --users= -h --help" -- "$cur") )
+            return 0
+        fi
+
+        case "$prev" in
+            --warmup-seconds=)
+                COMPREPLY=( $(compgen -W "0 3 5 10" -- "$cur") )
+                return 0
+                ;;
+            --measure-seconds=)
+                COMPREPLY=( $(compgen -W "10 30 60" -- "$cur") )
+                return 0
+                ;;
+            --target-rps=)
+                COMPREPLY=( $(compgen -W "50 100 200 500" -- "$cur") )
+                return 0
+                ;;
+            --users-list=)
+                COMPREPLY=( $(compgen -W "1,10,100 1,5,10,50,100 1,10,100,1000" -- "$cur") )
+                return 0
+                ;;
+            --users=)
+                COMPREPLY=( $(compgen -W "1 10 100 1000 5000" -- "$cur") )
+                return 0
+                ;;
+        esac
     fi
     return 0
 }

@@ -1,3 +1,12 @@
+replayshield (0.5.0-1) unstable; urgency=medium
+
+  * Release 0.5.0.
+  * Add min/max benchmark metrics for both single-db and per-user-db modes.
+  * Extend BENCH_RESULT output/parse format with min/max fields.
+  * Simplify benchmark iteration result counting logic.
+
+ -- YoungJin Ko <kyj9447@gmail.com>  Thu, 12 Feb 2026 00:00:00 +0000
+
 replayshield (0.4.0-1) unstable; urgency=medium
 
   * Release 0.4.0.
@@ -5,8 +14,11 @@ replayshield (0.4.0-1) unstable; urgency=medium
     under /var/lib/replayshield/users/*.db.enc.
   * Update authentication flow to open only the target user's DB file.
   * Update manage CLI flows (add/manage/delete/dump) for per-user DB layout.
-  * Add admin marker based key-verification and legacy single-DB migration path.
-  * Keep benchmark default at 500 measured iterations and seed one benchmark user.
+  * Add admin marker based key-verification.
+  * Benchmark now supports user-scale sweeps (--users-list, default 1,10,100)
+    with fixed traffic profile (--target-rps, --measure-seconds), alternating
+    mode order, per-user directory-scan lookup metric, and single-scenario
+    override via --users.
 
  -- YoungJin Ko <kyj9447@gmail.com>  Wed, 11 Feb 2026 00:00:00 +0000
 

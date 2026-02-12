@@ -34,8 +34,6 @@ public class ReplayShieldException extends RuntimeException {
         HTTP_SERVER,
         PAM_AUTH,
         CONFIGURATION,
-        CRYPTO,
-        CONSOLE_REQUIRED,
-        UNKNOWN
+        CRYPTO
     }
 }

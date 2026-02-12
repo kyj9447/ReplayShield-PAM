@@ -6,14 +6,16 @@ import java.io.IOException;
 public final class CliUtils {
 
     private static final Console CONSOLE = System.console();
+    private static final String CLI_HEADER = "=== ReplayShield Manage CLI ===";
 
     private CliUtils() {
     }
 
     public static int readInt(String prompt) {
+        Console console = requireInteractiveConsole();
         System.out.print(prompt);
         while (true) {
-            String line = CONSOLE.readLine().trim();
+            String line = console.readLine().trim();
             try {
                 return Integer.parseInt(line);
             } catch (NumberFormatException exception) {
@@ -22,12 +24,13 @@ public final class CliUtils {
         }
     }
 
-    public static void consoleClear() {
-        try {
-            new ProcessBuilder("clear").inheritIO().start().waitFor();
-        } catch (IOException | InterruptedException ignored) {
+    public static Console requireInteractiveConsole() {
+        if (CONSOLE == null) {
+            throw new ReplayShieldException(
+                    ReplayShieldException.ErrorType.CONFIGURATION,
+                    "Interactive console required (TTY not detected)");
         }
-        System.out.println("=== ReplayShield Manage CLI ===");
+        return CONSOLE;
     }
 
     public static void consoleClear(String payload) {
@@ -35,7 +38,7 @@ public final class CliUtils {
             new ProcessBuilder("clear").inheritIO().start().waitFor();
         } catch (IOException | InterruptedException ignored) {
         }
-        System.out.println("=== ReplayShield Manage CLI ===");
+        System.out.println(CLI_HEADER);
         if (payload != null) {
             System.out.println(payload);
         }

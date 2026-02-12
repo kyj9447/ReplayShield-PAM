@@ -1,11 +1,8 @@
 package dev.replayshield.db;
 
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 
@@ -16,37 +13,16 @@ public class Db {
 
     public static Connection open(Path dbPath) {
         try {
-            // 클래스 로드
-            Class.forName("org.sqlite.JDBC");
-
-            boolean newDb = !Files.exists(dbPath) || Files.size(dbPath) == 0;
             String url = "jdbc:sqlite:" + dbPath.toAbsolutePath();
             Connection conn = DriverManager.getConnection(url);
 
-            // 파일이 없거나 빈 파일이면 새 테이블 생성
-            if (newDb) {
-                initSchema(conn);
-            } else {
-                ensureSchema(conn);
-            }
+            initSchema(conn);
 
             return conn;
         } catch (ReplayShieldException exception) {
             throw exception;
-        } catch (IOException | ClassNotFoundException | SQLException exception) {
-            throw new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to open SQLite database", exception);
-        }
-    }
-
-    private static void ensureSchema(Connection conn) {
-        try (Statement st = conn.createStatement();
-                ResultSet rs = st.executeQuery(
-                        "SELECT name FROM sqlite_master WHERE type='table' AND name='user_config'")) {
-            if (!rs.next()) {
-                initSchema(conn);
-            }
         } catch (SQLException exception) {
-            throw new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to validate database schema", exception);
+            throw new ReplayShieldException(ErrorType.DATABASE_ACCESS, "Failed to open SQLite database", exception);
         }
     }
 

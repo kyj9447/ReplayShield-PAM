@@ -1,91 +1,231 @@
 package dev.replayshield.util;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
+import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.InetSocketAddress;
-import java.net.URI;
-import java.net.URLEncoder;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.sql.SQLException;
-import java.util.Arrays;
-import java.util.Base64;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-import com.sun.net.httpserver.Headers;
-import com.sun.net.httpserver.HttpContext;
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpPrincipal;
-
-import dev.replayshield.db.Db;
-import dev.replayshield.db.SecureDbSession;
-import dev.replayshield.security.EncryptDecrypt;
-import dev.replayshield.server.PamAuthHandler;
 import dev.replayshield.util.ReplayShieldException.ErrorType;
 
 public final class BenchmarkUtils {
 
-    private static final int DEFAULT_BENCH_WARMUP = 5;
-    private static final int DEFAULT_BENCH_ITERATIONS = 500;
-    private static final int TEST_BENCH_USER_COUNT = 1;
-    private static final int TEST_BENCH_PASSWORD_POOL_SIZE = 100;
-    private static final int BENCHMARK_TARGET_USER_INDEX = 0;
-    private static final int BENCHMARK_TARGET_PASSWORD_INDEX = 0;
-    private static final String BENCHMARK_INTERNAL_KEY_SEED = "ReplayShieldBenchmarkInternalKeyV1";
+    // Shared benchmark constants (also used by benchmark child process).
+    static final int FIXED_BENCH_PASSWORD_POOL_SIZE = 10;
+    static final int DEFAULT_BENCH_WARMUP_ITERATIONS = 100;
+    static final int DEFAULT_BENCH_MEASURE_ITERATIONS = 1000;
+    static final String DEFAULT_BENCH_USERS_LIST = "1,10,100,1000,10000";
+    static final int BENCHMARK_TARGET_PASSWORD_INDEX = 0;
+    static final String BENCHMARK_USER_DB_SUFFIX = ".db.enc";
+    static final String BENCHMARK_INTERNAL_KEY_SEED = "ReplayShieldBenchmarkInternalKeyV1";
+    static final String BENCHMARK_RESULT_PREFIX = "BENCH_RESULT";
+    private static final Pattern BENCHMARK_RESULT_PATTERN = Pattern.compile(
+            "^" + BENCHMARK_RESULT_PREFIX
+                    + "\\s+users=(\\d+)\\s+single\\(avg=([0-9]+(?:\\.[0-9]+)?),med=([0-9]+(?:\\.[0-9]+)?),min=([0-9]+(?:\\.[0-9]+)?),max=([0-9]+(?:\\.[0-9]+)?)\\)"
+                    + "\\s+peruser\\(avg=([0-9]+(?:\\.[0-9]+)?),med=([0-9]+(?:\\.[0-9]+)?),min=([0-9]+(?:\\.[0-9]+)?),max=([0-9]+(?:\\.[0-9]+)?)\\)$");
 
     private BenchmarkUtils() {
     }
 
-    public record BenchmarkOptions(int warmup, int iterations) {
+    record BenchmarkOptions(
+            int warmupIterations,
+            int measureIterations,
+            int[] usersList) {
     }
 
-    public record BenchmarkContext(PamAuthHandler handler, String username, String password, Path tempEncFile) {
+    private record BenchmarkScenarioResult(
+            int users,
+            double singleAvgMs,
+            double singleMedianMs,
+            double singleMinMs,
+            double singleMaxMs,
+            double perUserAvgMs,
+            double perUserMedianMs,
+            double perUserMinMs,
+            double perUserMaxMs) {
     }
 
-    public record BenchmarkIteration(
-            long totalNanos,
-            long requestReadNanos,
-            long formParseNanos,
-            long authTotalNanos,
-            long decryptNanos,
-            long authLogicNanos,
-            long encryptNanos,
-            String result) {
+    // =======================================================================
+    // 벤치마크 오케스트레이터
+    // =======================================================================
+    public static void runBenchmarkMode(String[] args) throws IOException, SQLException, NoSuchAlgorithmException {
+        // --help 인자
+        boolean hasHelpArg = false;
+        for (String arg : args) {
+            if ("--help".equals(arg) || "-h".equals(arg)) {
+                hasHelpArg = true;
+                break;
+            }
+        }
+        if (hasHelpArg) {
+            System.out.println(String.format("""
+                    Usage: replayshield benchmark [options]
+                      --warmup=<N>           Warmup iterations per mode (default: %d)
+                      --measure=<N>          Measured requests per mode (default: %d)
+                      --users-list=<CSV>     User-count sweep (default: %s)
+                      --users=<N>            Single user-count override
+                    """, DEFAULT_BENCH_WARMUP_ITERATIONS, DEFAULT_BENCH_MEASURE_ITERATIONS,
+                    DEFAULT_BENCH_USERS_LIST));
+            return;
+        }
+
+        // 인자 파싱
+        BenchmarkOptions options = parseBenchmarkOptions(args, 1);
+
+        // 벤치마크 시작
+        // 벤치마크 시나리오 출력
+        String usersLabel;
+        if (options.usersList().length == 1) {
+            usersLabel = Integer.toString(options.usersList()[0]);
+        } else {
+            StringBuilder usersBuilder = new StringBuilder();
+            for (int i = 0; i < options.usersList().length; i++) {
+                if (i > 0) {
+                    usersBuilder.append(',');
+                }
+                usersBuilder.append(options.usersList()[i]);
+            }
+            usersLabel = usersBuilder.toString();
+        }
+
+        CliUtils.consoleClear("[ Benchmark ]");
+        System.out.println("============================================================================");
+        System.out.println("mode       : compare single-db vs per-user-db");
+        System.out.println("execution  : parent(runBenchmarkMode) + child(BenchmarkProcessMain)");
+        System.out.println("warmup     : " + options.warmupIterations() + " iterations per mode");
+        System.out.println("measure    : " + options.measureIterations() + " requests per mode");
+        System.out.println("users      : " + usersLabel);
+        System.out.println("passwords  : " + FIXED_BENCH_PASSWORD_POOL_SIZE + " per user");
+        System.out.println("scope      : one auth cycle end-to-end");
+        System.out.println("metrics    : avg, median, min, max");
+        System.out.println("order      : alternating modes (single-first, then per-first)");
+        System.out.println("============================================================================");
+        System.out.println();
+
+        // 서브 프로세스 준비
+        String javaBinary = Path.of(System.getProperty("java.home"), "bin", "java").toString();
+        String classPath = System.getProperty("java.class.path");
+
+        // users-list 길이만큼 벤치마크 시나리오 실행
+        // =========================================================================
+        List<BenchmarkScenarioResult> scenarioResults = new ArrayList<>();
+        for (int users : options.usersList()) {
+            System.out.printf("user=%d benchmarking...%n", users);
+
+            // 서브 프로세스에 전달할 커맨드 구성
+            List<String> command = new ArrayList<>();
+            command.add(javaBinary);
+            command.add("-cp");
+            command.add(classPath);
+            command.add("dev.replayshield.util.BenchmarkProcessMain");
+            command.add("--warmup=" + options.warmupIterations());
+            command.add("--measure=" + options.measureIterations());
+            command.add("--users=" + users);
+
+            // 서브 프로세스 실행 구성
+            ProcessBuilder processBuilder = new ProcessBuilder(command);
+            processBuilder.redirectErrorStream(true); // stderr를 stdout으로 통합
+
+            BenchmarkScenarioResult parsedScenarioResult = null; // 결과 저장용
+            Process process = processBuilder.start(); // 서브 프로세스 실행
+
+            // 서브 프로세스 출력 읽기
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    System.out.println(line);
+                    BenchmarkScenarioResult parsed = tryParseMachineScenarioResult(line);
+                    if (parsed != null) {
+                        parsedScenarioResult = parsed;
+                    }
+                }
+            }
+
+            // 서브 프로세스 종료 처리
+            int exitCode;
+            try {
+                exitCode = process.waitFor();
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new ReplayShieldException(
+                        ErrorType.SYSTEM_ENVIRONMENT,
+                        "Benchmark child process interrupted.",
+                        exception);
+            }
+
+            if (exitCode != 0) {
+                throw new ReplayShieldException(
+                        ErrorType.SYSTEM_ENVIRONMENT,
+                        "Benchmark child process failed for users=" + users + " (exit code=" + exitCode + ").");
+            }
+            if (parsedScenarioResult == null) {
+                throw new ReplayShieldException(
+                        ErrorType.SYSTEM_ENVIRONMENT,
+                        "Benchmark child process did not return scenario result for users=" + users + ".");
+            }
+
+            // 결과 리스트에 추가
+            scenarioResults.add(parsedScenarioResult);
+        }
+        // =========================================================================
+
+        // 벤치마크 결과 요약 출력
+        System.out.println("[Scaling Summary]");
+        for (BenchmarkScenarioResult scenario : scenarioResults) {
+            System.out.printf(
+                    "  users=%d single(avg=%.3f ms,med=%.3f ms,min=%.3f ms,max=%.3f ms) peruser(avg=%.3f ms,med=%.3f ms,min=%.3f ms,max=%.3f ms)%n",
+                    scenario.users(),
+                    scenario.singleAvgMs(),
+                    scenario.singleMedianMs(),
+                    scenario.singleMinMs(),
+                    scenario.singleMaxMs(),
+                    scenario.perUserAvgMs(),
+                    scenario.perUserMedianMs(),
+                    scenario.perUserMinMs(),
+                    scenario.perUserMaxMs());
+        }
+        System.out.println();
     }
 
-    public record BenchmarkSummary(
-            long minNanos,
-            long p50Nanos,
-            long p95Nanos,
-            long p99Nanos,
-            long maxNanos,
-            long totalNanos,
-            double avgNanos,
-            double throughputOpsPerSec) {
-    }
+    // =======================================================================
+    // 유틸리티
+    // =======================================================================
 
+    // =======================================================================
+    // 벤치마크 옵션 파싱
+    // =======================================================================
+    static BenchmarkOptions parseBenchmarkOptions(String[] args, int startIndex) {
+        int warmupIterations = DEFAULT_BENCH_WARMUP_ITERATIONS;
+        int measureIterations = DEFAULT_BENCH_MEASURE_ITERATIONS;
+        int[] usersList = parseUsersListOption(DEFAULT_BENCH_USERS_LIST);
 
-    public static BenchmarkOptions parseBenchmarkOptions(String[] args) {
-        int warmup = DEFAULT_BENCH_WARMUP;
-        int iterations = DEFAULT_BENCH_ITERATIONS;
-
-        for (int i = 1; i < args.length; i++) {
+        for (int i = startIndex; i < args.length; i++) {
             String arg = args[i];
-            if (arg.startsWith("--warmup=")) {
-                warmup = parseNonNegativeIntOption("warmup", arg.substring("--warmup=".length()));
+            if ("--help".equals(arg) || "-h".equals(arg)) {
                 continue;
             }
-            if (arg.startsWith("--iterations=")) {
-                iterations = parsePositiveIntOption("iterations", arg.substring("--iterations=".length()));
+            if (arg.startsWith("--warmup=")) {
+                warmupIterations = parseIntOption("warmup", arg.substring("--warmup=".length()), 0);
+                continue;
+            }
+            if (arg.startsWith("--measure=")) {
+                measureIterations = parseIntOption("measure", arg.substring("--measure=".length()), 1);
+                continue;
+            }
+            if (arg.startsWith("--users-list=")) {
+                usersList = parseUsersListOption(arg.substring("--users-list=".length()));
+                continue;
+            }
+            if (arg.startsWith("--users=")) {
+                int users = parseIntOption("users", arg.substring("--users=".length()), 1);
+                usersList = new int[] { users };
                 continue;
             }
             throw new ReplayShieldException(
@@ -93,10 +233,32 @@ public final class BenchmarkUtils {
                     "Unknown benchmark option: " + arg + " (use 'replayshield benchmark --help').");
         }
 
-        return new BenchmarkOptions(warmup, iterations);
+        return new BenchmarkOptions(warmupIterations, measureIterations, usersList);
     }
 
-    private static int parseNonNegativeIntOption(String name, String raw) {
+    // =======================================================================
+    // 유저 리스트 파싱
+    // =======================================================================
+    private static int[] parseUsersListOption(String raw) {
+        String trimmed = raw == null ? "" : raw.trim();
+        if (trimmed.isEmpty()) {
+            throw new ReplayShieldException(
+                    ErrorType.CONFIGURATION,
+                    "--users-list must contain at least one positive integer.");
+        }
+
+        String[] tokens = trimmed.split(",");
+        int[] parsed = new int[tokens.length];
+        for (int i = 0; i < tokens.length; i++) {
+            parsed[i] = parseIntOption("users-list", tokens[i].trim(), 1);
+        }
+        return parsed;
+    }
+
+    // =======================================================================
+    // 정수 옵션 검증 파싱
+    // =======================================================================
+    private static int parseIntOption(String name, String raw, int minValue) {
         int parsed;
         try {
             parsed = Integer.parseInt(raw.trim());
@@ -106,374 +268,55 @@ public final class BenchmarkUtils {
                     "Invalid integer for --" + name + ": " + raw,
                     exception);
         }
-        if (parsed < 0) {
+        if (parsed < minValue) {
             throw new ReplayShieldException(
                     ErrorType.CONFIGURATION,
-                    "--" + name + " must be >= 0");
+                    "--" + name + " must be >= " + minValue);
         }
         return parsed;
     }
 
-    private static int parsePositiveIntOption(String name, String raw) {
-        int parsed = parseNonNegativeIntOption(name, raw);
-        if (parsed == 0) {
-            throw new ReplayShieldException(
-                    ErrorType.CONFIGURATION,
-                    "--" + name + " must be >= 1");
-        }
-        return parsed;
-    }
-
-    public static BenchmarkContext prepareBenchmarkContext(byte[] key)
-            throws IOException, SQLException, NoSuchAlgorithmException {
-        Path memoryDir = PathResolver.getMemoryDbDir().toPath();
-        if (!Files.exists(memoryDir)) {
-            Files.createDirectories(memoryDir);
-        }
-        Path testEncFile = Files.createTempFile(memoryDir, "replayshield-bench-", ".enc");
-        boolean prepared = false;
-        try {
-            String username = benchmarkUsername(BENCHMARK_TARGET_USER_INDEX);
-            String password = benchmarkPassword(BENCHMARK_TARGET_USER_INDEX, BENCHMARK_TARGET_PASSWORD_INDEX);
-            setupMockEncryptedDb(key, testEncFile);
-            PamAuthHandler handler = new PamAuthHandler(key, testEncFile);
-            prepared = true;
-            return new BenchmarkContext(handler, username, password, testEncFile);
-        } finally {
-            if (!prepared) {
-                deleteQuietly(testEncFile);
-            }
-        }
-    }
-
-    private static void setupMockEncryptedDb(byte[] key, Path targetEncFile)
-            throws SQLException, NoSuchAlgorithmException {
-        Path plainDb = PathResolver.createMemoryDbTempFile();
-        try {
-            try (Connection conn = Db.open(plainDb);
-                    PreparedStatement userConfigPs = conn.prepareStatement("""
-                            INSERT INTO user_config(username, block_count)
-                            VALUES(?, ?)
-                            """);
-                    PreparedStatement passwordPoolPs = conn.prepareStatement("""
-                            INSERT INTO password_pool(username, pw_hash, pw_hint, hit_count, blocked, last_use)
-                            VALUES(?, ?, ?, 0, 0, 0)
-                            """)) {
-                for (int userIndex = 0; userIndex < TEST_BENCH_USER_COUNT; userIndex++) {
-                    String username = benchmarkUsername(userIndex);
-                    userConfigPs.setString(1, username);
-                    userConfigPs.setInt(2, 0);
-                    userConfigPs.executeUpdate();
-
-                    for (int passwordIndex = 0; passwordIndex < TEST_BENCH_PASSWORD_POOL_SIZE; passwordIndex++) {
-                        String candidate = benchmarkPassword(userIndex, passwordIndex);
-                        char[] candidateChars = candidate.toCharArray();
-                        try {
-                            String hash = hashPassword(candidateChars);
-                            String hint = makeHint(candidateChars);
-                            passwordPoolPs.setString(1, username);
-                            passwordPoolPs.setString(2, hash);
-                            passwordPoolPs.setString(3, hint);
-                            passwordPoolPs.executeUpdate();
-                        } finally {
-                            Arrays.fill(candidateChars, '\0');
-                        }
-                    }
-                }
-            }
-
-            EncryptDecrypt.encryptFile(key, plainDb, targetEncFile);
-        } finally {
-            deleteQuietly(plainDb);
-        }
-    }
-
-    private static String benchmarkUsername(int userIndex) {
-        return "bench_user_" + userIndex;
-    }
-
-    private static String benchmarkPassword(int userIndex, int passwordIndex) {
-        return "bench_password_" + userIndex + "_" + passwordIndex;
-    }
-
-    public static byte[] createBenchmarkKey() throws NoSuchAlgorithmException {
-        MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
-        return sha256.digest(BENCHMARK_INTERNAL_KEY_SEED.getBytes(StandardCharsets.UTF_8));
-    }
-
-    // 벤치마크용 사이클 1회 실행
-    public static BenchmarkIteration runAuthBenchmarkIteration(BenchmarkContext context) throws SQLException {
-        PamAuthHandler.consumeLastHttpFlowMetrics();
-        SecureDbSession.consumeLastIoMetrics();
-
-        // handleHttpPost() 전체 플로우(요청 바디 읽기/파싱/인증) 측정한다.
-        String requestBody = buildFormRequestBody(context.username(), context.password());
-        BenchmarkHttpExchange exchange = new BenchmarkHttpExchange(requestBody);
-        String result;
-        try {
-            // HTTP 핸들러 진입점부터 PASS/FAIL 반환까지 1회 실행
-            result = context.handler().handleHttpPost(exchange);
-        } finally {
-            // 매 iteration마다 exchange 리소스를 정리
-            exchange.close();
-        }
-
-        // handleHttpPost() 내부에서 수집한 구간별 메트릭(total/read/parse/auth)을 회수
-        PamAuthHandler.HttpFlowMetrics flowMetrics = PamAuthHandler.consumeLastHttpFlowMetrics();
-        if (flowMetrics == null) {
-            throw new ReplayShieldException(
-                    ErrorType.PAM_AUTH,
-                    "Benchmark failed to capture request/read/parse timings.");
-        }
-
-        // SecureDbSession이 기록한 복호화/재암호화 시간 메트릭을 회수
-        SecureDbSession.SessionIoMetrics ioMetrics = SecureDbSession.consumeLastIoMetrics();
-        if (ioMetrics == null) {
-            throw new ReplayShieldException(
-                    ErrorType.DATABASE_ACCESS,
-                    "Benchmark failed to capture decrypt/encrypt timings.");
-        }
-
-        // HTTP 전체 처리 시간(요청 진입 ~ 최종 결과 반환)
-        long totalNanos = flowMetrics.totalNanos();
-        long requestReadNanos = flowMetrics.readBodyNanos();
-        long formParseNanos = flowMetrics.parseFormNanos();
-        long authTotalNanos = flowMetrics.authenticateNanos();
-        long decryptNanos = ioMetrics.decryptNanos();
-        long encryptNanos = ioMetrics.encryptNanos();
-        long authLogicNanos = authTotalNanos - decryptNanos - encryptNanos;
-
-        // 시계 오차/측정 분해 오차로 음수가 나올 수 있어 0으로 보정
-        if (authLogicNanos < 0) {
-            authLogicNanos = 0L;
-        }
-
-        // iteration 1회의 측정 결과를 불변 record로 반환
-        return new BenchmarkIteration(
-                totalNanos,
-                requestReadNanos,
-                formParseNanos,
-                authTotalNanos,
-                decryptNanos,
-                authLogicNanos,
-                encryptNanos,
-                result);
-    }
-
-    private static String buildFormRequestBody(String username, String password) {
-        String encodedUsername = URLEncoder.encode(username, StandardCharsets.UTF_8);
-        String encodedPassword = URLEncoder.encode(password, StandardCharsets.UTF_8);
-        return "username=" + encodedUsername + "&password=" + encodedPassword;
-    }
-
-    public static void printBenchmarkSummary(String label, BenchmarkSummary summary) {
-        System.out.println("[" + label + "]");
-        System.out.printf("  total      : %.3f ms%n", nanosToMillis(summary.totalNanos()));
-        System.out.printf("  avg        : %.3f ms%n", nanosToMillis(summary.avgNanos()));
-        System.out.printf("  min        : %.3f ms%n", nanosToMillis(summary.minNanos()));
-        System.out.printf("  p50        : %.3f ms%n", nanosToMillis(summary.p50Nanos()));
-        System.out.printf("  p95        : %.3f ms%n", nanosToMillis(summary.p95Nanos()));
-        System.out.printf("  p99        : %.3f ms%n", nanosToMillis(summary.p99Nanos()));
-        System.out.printf("  max        : %.3f ms%n", nanosToMillis(summary.maxNanos()));
-        System.out.printf("  throughput : %.2f ops/s%n", summary.throughputOpsPerSec());
-        System.out.println();
-    }
-
-    public static BenchmarkSummary summarizeBenchmark(long[] samplesNanos) {
-        long[] sorted = Arrays.copyOf(samplesNanos, samplesNanos.length);
-        Arrays.sort(sorted);
-
-        long totalNanos = 0L;
-        for (long sample : samplesNanos) {
-            totalNanos += sample;
-        }
-
-        double avgNanos = totalNanos / (double) samplesNanos.length;
-        double throughputOpsPerSec = totalNanos == 0
-                ? 0.0
-                : (samplesNanos.length * 1_000_000_000.0) / totalNanos;
-
-        return new BenchmarkSummary(
-                sorted[0],
-                percentileNanos(sorted, 0.50),
-                percentileNanos(sorted, 0.95),
-                percentileNanos(sorted, 0.99),
-                sorted[sorted.length - 1],
-                totalNanos,
-                avgNanos,
-                throughputOpsPerSec);
-    }
-
-    private static long percentileNanos(long[] sortedSamples, double percentile) {
-        int index = (int) Math.ceil(percentile * sortedSamples.length) - 1;
-        if (index < 0) {
-            index = 0;
-        }
-        if (index >= sortedSamples.length) {
-            index = sortedSamples.length - 1;
-        }
-        return sortedSamples[index];
-    }
-
-    private static double nanosToMillis(long nanos) {
-        return nanos / 1_000_000.0;
-    }
-
-    private static double nanosToMillis(double nanos) {
-        return nanos / 1_000_000.0;
-    }
-
-    public static boolean containsArg(String[] args, String target) {
-        for (String arg : args) {
-            if (target.equals(arg)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static String hashPassword(char[] password) throws NoSuchAlgorithmException {
-        MessageDigest md = MessageDigest.getInstance("SHA-256");
-        byte[] bytes = new String(password).getBytes(StandardCharsets.UTF_8);
-        byte[] digest = md.digest(bytes);
-        Arrays.fill(bytes, (byte) 0);
-        return Base64.getEncoder().encodeToString(digest);
-    }
-
-    private static String makeHint(char[] password) {
-        char first = password[0];
-        char last = password[password.length - 1];
-        return first + "*****" + last;
-    }
-
-    public static boolean deleteQuietly(Path target) {
-        try {
-            return Files.deleteIfExists(target);
-        } catch (IOException ignored) {
-            return false;
-        }
-    }
-
-    private static final class BenchmarkHttpExchange extends HttpExchange {
-        private final Headers requestHeaders = new Headers();
-        private final Headers responseHeaders = new Headers();
-        private final Map<String, Object> attributes = new HashMap<>();
-        private InputStream requestBody;
-        private OutputStream responseBody;
-        private int responseCode = -1;
-
-        private BenchmarkHttpExchange(String requestBody) {
-            this.requestBody = new ByteArrayInputStream(requestBody.getBytes(StandardCharsets.UTF_8));
-            this.responseBody = new ByteArrayOutputStream();
-            this.requestHeaders.add("Content-Type", "application/x-www-form-urlencoded");
-        }
-
-        @Override
-        public Headers getRequestHeaders() {
-            return requestHeaders;
-        }
-
-        @Override
-        public Headers getResponseHeaders() {
-            return responseHeaders;
-        }
-
-        @Override
-        public URI getRequestURI() {
-            return URI.create("/auth");
-        }
-
-        @Override
-        public String getRequestMethod() {
-            return "POST";
-        }
-
-        @Override
-        public HttpContext getHttpContext() {
+    // =======================================================================
+    // 결과 전체 파싱 ( stdout 파싱 )
+    // =======================================================================
+    private static BenchmarkScenarioResult tryParseMachineScenarioResult(String line) {
+        if (!line.startsWith(BENCHMARK_RESULT_PREFIX + " ")) {
             return null;
         }
 
-        @Override
-        public void close() {
-            try {
-                requestBody.close();
-            } catch (IOException ignored) {
-            }
-            try {
-                responseBody.close();
-            } catch (IOException ignored) {
-            }
+        Matcher matcher = BENCHMARK_RESULT_PATTERN.matcher(line.trim());
+        if (!matcher.matches()) {
+            throw new ReplayShieldException(
+                    ErrorType.SYSTEM_ENVIRONMENT,
+                    "Failed to parse benchmark child result line: " + line);
         }
 
-        @Override
-        public InputStream getRequestBody() {
-            return requestBody;
-        }
-
-        @Override
-        public OutputStream getResponseBody() {
-            return responseBody;
-        }
-
-        @Override
-        public void sendResponseHeaders(int responseCode, long responseLength) {
-            this.responseCode = responseCode;
-        }
-
-        @Override
-        public InetSocketAddress getRemoteAddress() {
-            return new InetSocketAddress("127.0.0.1", 0);
-        }
-
-        @Override
-        public int getResponseCode() {
-            return responseCode;
-        }
-
-        @Override
-        public InetSocketAddress getLocalAddress() {
-            return new InetSocketAddress("127.0.0.1", 4444);
-        }
-
-        @Override
-        public String getProtocol() {
-            return "HTTP/1.1";
-        }
-
-        @Override
-        public Object getAttribute(String name) {
-            return attributes.get(name);
-        }
-
-        @Override
-        public void setAttribute(String name, Object value) {
-            attributes.put(name, value);
-        }
-
-        @Override
-        public void setStreams(InputStream in, OutputStream out) {
-            if (in != null) {
-                this.requestBody = in;
-            }
-            if (out != null) {
-                this.responseBody = out;
-            }
-        }
-
-        @Override
-        public HttpPrincipal getPrincipal() {
-            return null;
-        }
-    }
-
-    private static void consoleClear(String payload) {
         try {
-            new ProcessBuilder("clear").inheritIO().start().waitFor();
-        } catch (IOException | InterruptedException ignored) {
-        }
-        System.out.println("=== ReplayShield Manage CLI ===");
-        if (payload != null) {
-            System.out.println(payload);
+            int users = Integer.parseInt(matcher.group(1));
+            double singleAvgMs = Double.parseDouble(matcher.group(2));
+            double singleMedianMs = Double.parseDouble(matcher.group(3));
+            double singleMinMs = Double.parseDouble(matcher.group(4));
+            double singleMaxMs = Double.parseDouble(matcher.group(5));
+            double perUserAvgMs = Double.parseDouble(matcher.group(6));
+            double perUserMedianMs = Double.parseDouble(matcher.group(7));
+            double perUserMinMs = Double.parseDouble(matcher.group(8));
+            double perUserMaxMs = Double.parseDouble(matcher.group(9));
+            return new BenchmarkScenarioResult(
+                    users,
+                    singleAvgMs,
+                    singleMedianMs,
+                    singleMinMs,
+                    singleMaxMs,
+                    perUserAvgMs,
+                    perUserMedianMs,
+                    perUserMinMs,
+                    perUserMaxMs);
+        } catch (NumberFormatException exception) {
+            throw new ReplayShieldException(
+                    ErrorType.SYSTEM_ENVIRONMENT,
+                    "Failed to parse benchmark child result line: " + line,
+                    exception);
         }
     }
+
 }

@@ -7,19 +7,18 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 
 import com.sun.net.httpserver.HttpExchange;
 
 import dev.replayshield.db.SecureDbSession;
+import dev.replayshield.security.PasswordCodec;
 import dev.replayshield.util.PathResolver;
 import dev.replayshield.util.ReplayShieldException;
 import dev.replayshield.util.ReplayShieldException.ErrorType;
@@ -106,13 +105,15 @@ public class PamAuthHandler {
 
     private Map<String, String> parseFormUrlEncoded(String body) {
         Map<String, String> map = new HashMap<>();
-        if (body == null || body.isEmpty())
+        if (body == null || body.isEmpty()) {
             return map;
+        }
         String[] parts = body.split("&");
         for (String part : parts) {
             int idx = part.indexOf('=');
-            if (idx <= 0)
+            if (idx <= 0) {
                 continue;
+            }
             String k = URLDecoder.decode(part.substring(0, idx), StandardCharsets.UTF_8);
             String v = URLDecoder.decode(part.substring(idx + 1), StandardCharsets.UTF_8);
             map.put(k, v);
@@ -142,7 +143,15 @@ public class PamAuthHandler {
     }
 
     private String doAuth(Connection conn, String username, String password) throws SQLException {
-        String hash = hashPassword(password);
+        String hash;
+        try {
+            hash = PasswordCodec.hashPassword(password);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new ReplayShieldException(
+                    ErrorType.PAM_AUTH,
+                    "SHA-256 digest not available",
+                    exception);
+        }
 
         // 1) user_config에서 block_count 조회
         int blockCount;
@@ -225,19 +234,6 @@ public class PamAuthHandler {
         refreshBlockedState(conn, username, blockCount);
 
         return "PASS";
-    }
-
-    private String hashPassword(String pw) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] digest = md.digest(pw.getBytes(StandardCharsets.UTF_8));
-            return Base64.getEncoder().encodeToString(digest);
-        } catch (NoSuchAlgorithmException exception) {
-            throw new ReplayShieldException(
-                    ErrorType.PAM_AUTH,
-                    "SHA-256 digest not available",
-                    exception);
-        }
     }
 
     // last_use 기준으로 block 대상 패스워드계산

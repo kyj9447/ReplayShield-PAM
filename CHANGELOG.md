@@ -2,14 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.0] - 2026-02-12
+
+### Changed
+- Benchmark output now includes `min` and `max` metrics in addition to `avg` and `median` for both single-db and per-user-db modes.
+- `BENCH_RESULT` machine-readable format was expanded to include `min`/`max` fields, and parent-side parsing/summary output was updated accordingly.
+- Benchmark iteration result counting was simplified into a single `switch` block.
+- Project version updated to `0.5.0`.
+
 ## [0.4.0] - 2026-02-11
 
 ### Changed
 - Authentication storage layout moved from a single encrypted DB to per-user encrypted DB files under `/var/lib/replayshield/users/*.db.enc`.
 - Authentication flow now opens only the target user's encrypted DB file, reducing user-count-proportional overhead from scanning a shared DB.
 - `manage` CLI operations were updated to use per-user DB files (create/manage/delete/dump).
-- Admin key verification now uses an admin marker file (`/var/lib/replayshield/admin.marker`) and supports one-time migration from legacy `/var/lib/replayshield/secure.db.enc`.
-- Benchmark dataset now targets a single user with 100 passwords and runs 500 measured iterations by default.
+- Admin key verification now uses an admin marker file (`/var/lib/replayshield/admin.marker`).
+- Benchmark compare mode now runs user-scale sweeps (`--users-list`, default `1,10,100`) with fixed traffic profile (`--target-rps`, `--measure-seconds`), alternating mode order, 100 passwords per user, and explicit per-user directory-scan lookup measurement (`lookup`).
 - Project version updated to `0.4.0`.
 
 ## [0.3.1] - 2026-02-11

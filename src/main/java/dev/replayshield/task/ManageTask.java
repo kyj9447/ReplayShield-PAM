@@ -2,10 +2,8 @@ package dev.replayshield.task;
 
 import java.io.Console;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -14,7 +12,6 @@ import java.sql.SQLException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Base64;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
@@ -24,6 +21,7 @@ import dev.replayshield.db.SecureDbSession;
 import dev.replayshield.db.SecureDbSession.DbSession;
 import dev.replayshield.security.AdminKeyHolder;
 import dev.replayshield.security.KeyLoader;
+import dev.replayshield.security.PasswordCodec;
 import dev.replayshield.server.PamAuthHandler;
 import dev.replayshield.util.AsciiTable;
 import dev.replayshield.util.CliUtils;
@@ -37,30 +35,41 @@ public final class ManageTask {
 
     private static final Console CONSOLE = System.console();
     private static final int MIN_PASSWORD_POOL_SIZE = 3;
+    private static final String USERNAME_INVALID_MESSAGE =
+            "Username contains unsupported characters. Use letters, digits, '.', '_' or '-'.";
+
+    private static String promptValidatedUsername(String prompt) {
+        while (true) {
+            System.out.print(prompt);
+            String username = CONSOLE.readLine().trim();
+            if ("CANCEL".equalsIgnoreCase(username)) {
+                return null;
+            }
+            if (username.isEmpty()) {
+                System.out.println("Username required.");
+                continue;
+            }
+            try {
+                // Validate characters; path itself is not used here.
+                PathResolver.getUserEncryptedDbFile(username);
+                return username;
+            } catch (ReplayShieldException exception) {
+                System.out.println(USERNAME_INVALID_MESSAGE);
+            }
+        }
+    }
 
     public static void manageAddUser(byte[] key)
             throws SQLException, NoSuchAlgorithmException, ReplayShieldException {
         CliUtils.consoleClear("[ Add New User ]");
         String username;
         while (true) {
-            System.out.print("New username (type CANCEL to cancel): ");
-            username = CONSOLE.readLine().trim();
-            if ("CANCEL".equalsIgnoreCase(username)) {
-                CliUtils.consoleClear();
+            username = promptValidatedUsername("New username (type CANCEL to cancel): ");
+            if (username == null) {
+                CliUtils.consoleClear(null);
                 return;
             }
-            if (username.isEmpty()) {
-                System.out.println("Username cannot be empty.");
-                continue;
-            }
-
-            boolean exists;
-            try {
-                exists = PathResolver.userEncryptedDbExists(username);
-            } catch (ReplayShieldException exception) {
-                System.out.println("Username contains unsupported characters. Use letters, digits, '.', '_' or '-'.");
-                continue;
-            }
+            boolean exists = PathResolver.userEncryptedDbExists(username);
             boolean existsInInactive = PathResolver.userEncryptedDbExistsInInactive(username);
             if (exists) {
                 System.out.println("Username already exists. Choose another.");
@@ -93,7 +102,13 @@ public final class ManageTask {
             }
             Arrays.fill(confirm, '\0');
 
-            boolean duplicate = pwList.stream().anyMatch(existing -> Arrays.equals(existing, input));
+            boolean duplicate = false;
+            for (char[] existing : pwList) {
+                if (Arrays.equals(existing, input)) {
+                    duplicate = true;
+                    break;
+                }
+            }
             if (duplicate) {
                 System.out.println("This password was already entered. Please use a different one.");
                 Arrays.fill(input, '\0');
@@ -125,13 +140,13 @@ public final class ManageTask {
                 ps.setInt(2, blockCount);
                 ps.executeUpdate();
             }
-            for (char[] pw : pwList) {
-                String hash = hashPassword(pw);
-                String hint = makeHint(pw);
-                try (PreparedStatement ps = conn.prepareStatement("""
-                        INSERT INTO password_pool(username, pw_hash, pw_hint, hit_count, blocked)
-                        VALUES(?, ?, ?, 0, 0)
-                        """)) {
+            try (PreparedStatement ps = conn.prepareStatement("""
+                    INSERT INTO password_pool(username, pw_hash, pw_hint, hit_count, blocked)
+                    VALUES(?, ?, ?, 0, 0)
+                    """)) {
+                for (char[] pw : pwList) {
+                    String hash = PasswordCodec.hashPassword(pw);
+                    String hint = PasswordCodec.makeHint(pw);
                     ps.setString(1, username);
                     ps.setString(2, hash);
                     ps.setString(3, hint);
@@ -146,27 +161,15 @@ public final class ManageTask {
         }
     }
 
-    public static void manageDeleteUser(byte[] key) throws SQLException, ReplayShieldException {
+    public static void manageDeleteUser(byte[] key) {
         CliUtils.consoleClear("[ Delete User ]");
         while (true) {
-            System.out.print("Username to delete (type CANCEL to cancel): ");
-            String username = CONSOLE.readLine().trim();
-            if ("CANCEL".equalsIgnoreCase(username)) {
-                CliUtils.consoleClear();
+            String username = promptValidatedUsername("Username to delete (type CANCEL to cancel): ");
+            if (username == null) {
+                CliUtils.consoleClear(null);
                 return;
             }
-            if (username.isEmpty()) {
-                System.out.println("Username required.");
-                continue;
-            }
-            boolean exists;
-            try {
-                exists = PathResolver.userEncryptedDbExists(username);
-            } catch (ReplayShieldException exception) {
-                System.out.println("Username contains unsupported characters.");
-                continue;
-            }
-            if (!exists) {
+            if (!PathResolver.userEncryptedDbExists(username)) {
                 System.out.println("User not found.");
                 continue;
             }
@@ -194,25 +197,13 @@ public final class ManageTask {
             throws SQLException, ReplayShieldException, NoSuchAlgorithmException {
         String username;
         while (true) {
-            System.out.print("Target username (type CANCEL to cancel): ");
-            username = CONSOLE.readLine().trim();
-            if ("CANCEL".equalsIgnoreCase(username)) {
-                CliUtils.consoleClear();
+            username = promptValidatedUsername("Target username (type CANCEL to cancel): ");
+            if (username == null) {
+                CliUtils.consoleClear(null);
                 return;
             }
-            if (username.isEmpty()) {
-                System.out.println("Username required.");
-                continue;
-            }
-            boolean exists;
-            try {
-                exists = PathResolver.userEncryptedDbExists(username);
-            } catch (ReplayShieldException exception) {
-                System.out.println("Username contains unsupported characters.");
-                continue;
-            }
-            if (exists) {
-                CliUtils.consoleClear();
+            if (PathResolver.userEncryptedDbExists(username)) {
+                CliUtils.consoleClear(null);
                 break;
             }
             System.out.println("User not found.");
@@ -232,10 +223,10 @@ public final class ManageTask {
                 default -> System.out.println("Unknown menu.");
             }
         }
-        CliUtils.consoleClear();
+        CliUtils.consoleClear(null);
     }
 
-    public static void manageChangeAdminPassword(byte[] key) throws SQLException, ReplayShieldException {
+    public static void manageChangeAdminPassword(byte[] key) {
         byte[] updated = KeyLoader.changeAdminPassword(key);
         if (updated != null) {
             AdminKeyHolder.setKey(updated);
@@ -246,7 +237,7 @@ public final class ManageTask {
     private static void showUserPwPool(byte[] key, String username) throws SQLException, ReplayShieldException {
         Path userDbFile = PathResolver.getUserEncryptedDbFile(username).toPath();
         try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key, userDbFile)) {
-            CliUtils.consoleClear();
+        CliUtils.consoleClear(null);
             Connection conn = session.connection();
             SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
             try (PreparedStatement ps = conn.prepareStatement("""
@@ -289,60 +280,60 @@ public final class ManageTask {
         CliUtils.consoleClear("[ Manage User: " + username + " ]");
         Path userDbFile = PathResolver.getUserEncryptedDbFile(username).toPath();
 
-        Set<String> existingHashes = new HashSet<>();
-        try (var session = SecureDbSession.openReadOnly(key, userDbFile);
-                var ps = session.connection().prepareStatement(
-                        "SELECT pw_hash FROM password_pool WHERE username=?")) {
-            ps.setString(1, username);
-            try (var rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    existingHashes.add(rs.getString(1));
+        try (SecureDbSession.DbSession session = SecureDbSession.openWritable(key, userDbFile)) {
+            Connection conn = session.connection();
+            Set<String> existingHashes = new HashSet<>();
+            try (PreparedStatement selectPs = conn.prepareStatement(
+                    "SELECT pw_hash FROM password_pool WHERE username=?");
+                    PreparedStatement insertPs = conn.prepareStatement("""
+                            INSERT INTO password_pool(username, pw_hash, pw_hint, hit_count, blocked)
+                            VALUES(?, ?, ?, 0, 0)
+                            """)) {
+                selectPs.setString(1, username);
+                try (ResultSet rs = selectPs.executeQuery()) {
+                    while (rs.next()) {
+                        existingHashes.add(rs.getString(1));
+                    }
+                }
+
+                while (true) {
+                    System.out.print("New password: ");
+                    char[] pw = CONSOLE.readPassword();
+
+                    if (pw.length == 0) {
+                        System.out.println("Password cannot be empty.");
+                        continue;
+                    }
+
+                    System.out.print("Confirm password: ");
+                    char[] confirm = CONSOLE.readPassword();
+                    if (!Arrays.equals(pw, confirm)) {
+                        System.out.println("Passwords do not match.");
+                        Arrays.fill(pw, '\0');
+                        Arrays.fill(confirm, '\0');
+                        continue;
+                    }
+                    Arrays.fill(confirm, '\0');
+
+                    String newHash = PasswordCodec.hashPassword(pw);
+                    if (existingHashes.contains(newHash)) {
+                        System.out.println("This password is already registered. Enter a different one.");
+                        Arrays.fill(pw, '\0');
+                        continue;
+                    }
+
+                    String hint = PasswordCodec.makeHint(pw);
+                    Arrays.fill(pw, '\0');
+
+                    insertPs.setString(1, username);
+                    insertPs.setString(2, newHash);
+                    insertPs.setString(3, hint);
+                    insertPs.executeUpdate();
+
+                    CliUtils.consoleClear("[ Password added. ]");
+                    return;
                 }
             }
-        }
-
-        char[] pw;
-        while (true) {
-            System.out.print("New password: ");
-            pw = CONSOLE.readPassword();
-
-            if (pw.length == 0) {
-                System.out.println("Password cannot be empty.");
-                continue;
-            }
-
-            System.out.print("Confirm password: ");
-            char[] confirm = CONSOLE.readPassword();
-            if (!Arrays.equals(pw, confirm)) {
-                System.out.println("Passwords do not match.");
-                Arrays.fill(pw, '\0');
-                Arrays.fill(confirm, '\0');
-                continue;
-            }
-            Arrays.fill(confirm, '\0');
-
-            String newHash = hashPassword(pw);
-            if (existingHashes.contains(newHash)) {
-                System.out.println("This password is already registered. Enter a different one.");
-                Arrays.fill(pw, '\0');
-                continue;
-            }
-
-            String hint = makeHint(pw);
-            Arrays.fill(pw, '\0');
-
-            try (var session = SecureDbSession.openWritable(key, userDbFile);
-                    var ps = session.connection().prepareStatement("""
-                    INSERT INTO password_pool(username, pw_hash, pw_hint, hit_count, blocked)
-                    VALUES(?, ?, ?, 0, 0)
-                    """)) {
-                ps.setString(1, username);
-                ps.setString(2, newHash);
-                ps.setString(3, hint);
-                ps.executeUpdate();
-            }
-            CliUtils.consoleClear("[ Password added. ]");
-            break;
         }
     }
 
@@ -359,10 +350,10 @@ public final class ManageTask {
                 return;
             }
             if (id > 0) {
-                int passwordCount;
-                int blockCount;
-                try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key, userDbFile)) {
+                try (SecureDbSession.DbSession session = SecureDbSession.openWritable(key, userDbFile)) {
                     Connection conn = session.connection();
+                    int passwordCount;
+                    int blockCount;
 
                     try (PreparedStatement ps = conn.prepareStatement("""
                             SELECT COUNT(*) FROM password_pool WHERE username=?
@@ -386,21 +377,17 @@ public final class ManageTask {
                             blockCount = rs.getInt(1);
                         }
                     }
-                }
 
-                if (passwordCount <= MIN_PASSWORD_POOL_SIZE) {
-                    CliUtils.consoleClear("[ Need at least " + MIN_PASSWORD_POOL_SIZE + " passwords per user. ]");
-                    return;
-                }
-                if (blockCount <= 1) {
-                    CliUtils.consoleClear("[ block_count cannot be reduced below 1. ]");
-                    return;
-                }
+                    if (passwordCount <= MIN_PASSWORD_POOL_SIZE) {
+                        CliUtils.consoleClear("[ Need at least " + MIN_PASSWORD_POOL_SIZE + " passwords per user. ]");
+                        return;
+                    }
+                    if (blockCount <= 1) {
+                        CliUtils.consoleClear("[ block_count cannot be reduced below 1. ]");
+                        return;
+                    }
 
-                int newBlockCount = blockCount - 1;
-
-                try (SecureDbSession.DbSession session = SecureDbSession.openWritable(key, userDbFile)) {
-                    Connection conn = session.connection();
+                    int newBlockCount = blockCount - 1;
                     boolean originalAutoCommit = conn.getAutoCommit();
                     conn.setAutoCommit(false);
                     try {
@@ -445,9 +432,9 @@ public final class ManageTask {
             throws SQLException, ReplayShieldException {
         Path userDbFile = PathResolver.getUserEncryptedDbFile(username).toPath();
 
-        int pwCount;
-        try (SecureDbSession.DbSession session = SecureDbSession.openReadOnly(key, userDbFile)) {
+        try (SecureDbSession.DbSession session = SecureDbSession.openWritable(key, userDbFile)) {
             Connection conn = session.connection();
+            int pwCount;
             try (PreparedStatement ps = conn.prepareStatement("""
                     SELECT COUNT(*) FROM password_pool WHERE username=?
                     """)) {
@@ -457,24 +444,20 @@ public final class ManageTask {
                     pwCount = rs.getInt(1);
                 }
             }
-        }
-
-        if (pwCount <= 1) {
-            System.out.println("Need at least 2 passwords to set block_count.");
-            return;
-        }
-        int bc;
-        while (true) {
-            String prompt = "New block_count (1 ~ " + (pwCount - 1) + "): ";
-            bc = CliUtils.readInt(prompt);
-            if (bc >= 1 && bc < pwCount) {
-                break;
+            if (pwCount <= 1) {
+                System.out.println("Need at least 2 passwords to set block_count.");
+                return;
             }
-            System.out.println("block_count must be between 1 and " + (pwCount - 1));
-        }
+            int bc;
+            while (true) {
+                String prompt = "New block_count (1 ~ " + (pwCount - 1) + "): ";
+                bc = CliUtils.readInt(prompt);
+                if (bc >= 1 && bc < pwCount) {
+                    break;
+                }
+                System.out.println("block_count must be between 1 and " + (pwCount - 1));
+            }
 
-        try (DbSession session = SecureDbSession.openWritable(key, userDbFile)) {
-            Connection conn = session.connection();
             try (PreparedStatement ps = conn.prepareStatement("""
                     UPDATE user_config SET block_count=? WHERE username=?
                     """)) {
@@ -487,17 +470,4 @@ public final class ManageTask {
         }
     }
 
-    private static String hashPassword(char[] pw) throws NoSuchAlgorithmException {
-        MessageDigest md = MessageDigest.getInstance("SHA-256");
-        byte[] bytes = new String(pw).getBytes(StandardCharsets.UTF_8);
-        byte[] digest = md.digest(bytes);
-        Arrays.fill(bytes, (byte) 0);
-        return Base64.getEncoder().encodeToString(digest);
-    }
-
-    private static String makeHint(char[] pw) {
-        char first = pw[0];
-        char last = pw[pw.length - 1];
-        return first + "*****" + last;
-    }
 }
